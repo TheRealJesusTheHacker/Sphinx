@@ -157,10 +157,12 @@ class MainWindow(QMainWindow):
         log_layout.addLayout(log_controls)
         layout.addWidget(log_box)
 
+        self._state_cache = None
+        self._state_at = 0.0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(1000)
-        self._refresh()
+        self._refresh(force_state=True)
         self._refresh_list_status()
 
     # --- Entry editors (allowlist / custom entries) -------------------
@@ -233,7 +235,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText(message)
         except Exception as e:  # plain-language failure, nothing hidden
             QMessageBox.warning(self, "Sphinx", str(e))
-        self._refresh()
+        self._refresh(force_state=True)
 
     # --- Leftover handling ------------------------------------------------
 
@@ -243,11 +245,11 @@ class MainWindow(QMainWindow):
             self.status_label.setText(message)
         except Exception as e:
             QMessageBox.warning(self, "Sphinx", str(e))
-        self._refresh()
+        self._refresh(force_state=True)
 
     def _on_dismiss_leftover(self):
         self.controller.guard.dismiss_leftover()
-        self._refresh()
+        self._refresh(force_state=True)
 
     # --- List updates -------------------------------------------------------
 
@@ -334,27 +336,54 @@ class MainWindow(QMainWindow):
 
     # --- Refresh ----------------------------------------------------------------
 
-    def _refresh(self):
+    #: How often the window re-reads the machine's DNS state. Every
+    #: read is a set of PowerShell invocations on real Windows —
+    #: doing them on the 1-second counter tick would burn a core
+    #: forever for a window that mostly sits open. Actions that
+    #: change the state force an immediate re-read instead.
+    STATE_REFRESH_S = 15.0
+
+    def _refresh(self, force_state=False):
         engine = self.controller.engine
         self.counter_label.setText(
             f"Blocked: {engine.blocked_count:,}   Allowed: {engine.allowed_count:,}"
         )
-        try:
-            state = self.controller.dns_state()
-        except Exception as e:
-            # Reading the machine's DNS state must never take the
-            # window down with it: show that the state is unreadable
-            # and leave everything else exactly as it is.
-            self.status_label.setText(
-                f"Sphinx couldn't read this machine's DNS settings ({e}). "
-                "Nothing was changed."
-            )
-            self.leftover_box.setVisible(False)
-            return
+        now = time.monotonic()
+        if (
+            force_state
+            or self._state_cache is None
+            or now - self._state_at >= self.STATE_REFRESH_S
+        ):
+            try:
+                self._state_cache = self.controller.dns_state()
+                self._state_at = now
+            except Exception as e:
+                # Reading the machine's DNS state must never take the
+                # window down with it: show that the state is
+                # unreadable and leave everything else exactly as is.
+                # (The failure is throttled too — no retry storm.)
+                self._state_at = now
+                self.status_label.setText(
+                    f"Sphinx couldn't read this machine's DNS settings ({e}). "
+                    "Nothing was changed."
+                )
+                self.leftover_box.setVisible(False)
+                return
+        state = self._state_cache
         if self.controller.running:
-            self.status_label.setText(
-                "Sphinx is ON — DNS points at the filter on this machine."
-            )
+            if state is DnsState.ENGAGED:
+                self.status_label.setText(
+                    "Sphinx is ON — DNS points at the filter on this machine."
+                )
+            else:
+                # The status reflects the real state, never the
+                # desired one: the filter runs, but DNS no longer
+                # points at it (something changed it underneath us).
+                self.status_label.setText(
+                    "Sphinx is on, but DNS no longer points at the "
+                    "filter — turn Sphinx off and on again to restore "
+                    "protection."
+                )
             self.toggle_button.setText("Turn Sphinx off")
         else:
             self.toggle_button.setText("Turn Sphinx on")

@@ -17,15 +17,16 @@ ADAPTERS = [
 
 
 class FakeServer:
-    def __init__(self, engine, answers=True):
+    def __init__(self, engine, answers=True, bound=None):
         self.engine = engine
         self._answers = answers
+        self._bound = bound
         self.started = False
         self.stopped = False
 
     def start(self):
         self.started = True
-        return [("127.0.0.1", 53), ("::1", 53)]
+        return self._bound or [("127.0.0.1", 53), ("::1", 53)]
 
     def answers_on(self, address, timeout=2.0):
         return self._answers
@@ -97,3 +98,37 @@ class TestReload:
         controller.reload_lists()
         assert controller._current_lists().is_blocked("mine.example.com")
         assert controller._current_lists().is_blocked("sub.mine.example.com")
+
+
+class TestPartialBind:
+    """Windows audit (Phase 1): when the server could only bind one
+    loopback family, the controller used to point BOTH families'
+    DNS at it anyway — the unbound family aimed at a resolver that
+    isn't answering. Only proven loopbacks are engaged now."""
+
+    def test_unbound_family_dns_is_left_alone(self, tmp_path):
+        store = Store(tmp_path / "data")
+        manager = FakeDnsManager(ADAPTERS, elevated=True)
+        controller = SphinxController(
+            store,
+            manager,
+            tmp_path / "data",
+            server_factory=lambda e: FakeServer(e, bound=[("127.0.0.1", 53)]),
+        )
+        controller.start()
+        assert manager.get_dns("Wi-Fi", "IPv4") == ["127.0.0.1"]
+        assert manager.get_dns("Wi-Fi", "IPv6") == []  # never moved
+        assert controller.dns_state() is DnsState.ENGAGED
+        controller.stop()
+        assert manager.get_dns("Wi-Fi", "IPv4") == ["192.168.1.1"]
+        assert manager.get_dns("Wi-Fi", "IPv6") == []
+
+
+class TestLogToggle:
+    def test_turning_recording_off_does_not_erase_the_log(self, tmp_path):
+        controller, _, _ = make_controller(tmp_path)
+        controller.engine.query_log.record("ads.example.com", True, 1000)
+        controller.set_log_enabled(False)
+        # "Off" and "clear" are separate controls (FILTER-SPEC).
+        assert len(controller.engine.query_log) == 1
+        assert not controller.engine.log_enabled

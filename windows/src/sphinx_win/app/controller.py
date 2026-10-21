@@ -77,8 +77,10 @@ class SphinxController:
     def set_log_enabled(self, enabled: bool) -> None:
         self.store.set_query_log_enabled(enabled)
         self.engine.log_enabled = enabled
-        if not enabled:
-            self.engine.query_log.clear()
+        # Turning recording off does NOT erase the existing log:
+        # "off" and "clear" are separate controls (FILTER-SPEC's
+        # counting/log rules; the Android edition's audited behavior
+        # is the same). The Clear button is the only eraser.
 
     # --- Lifecycle -----------------------------------------------------
 
@@ -108,7 +110,14 @@ class SphinxController:
                         "The filter started but did not answer on "
                         f"{address}, so DNS was left unchanged."
                     )
-            result = self.guard.engage()
+            # Engage only the loopbacks just proven to answer: a
+            # family the server could not bind (IPv6 is best-effort)
+            # is recorded in the backup but its DNS is left alone —
+            # the machine is never aimed at a resolver that isn't
+            # answering.
+            result = self.guard.engage(
+                only_loopbacks={address for address, _port in bound}
+            )
         except NotElevatedError:
             server.stop()
             raise
