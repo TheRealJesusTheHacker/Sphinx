@@ -60,6 +60,28 @@ resolver and the answer comes right back.
   written to permanent storage, never sent anywhere, and disappears
   when the app's process stops. Recording is **on by default**; you
   can turn it off, or clear the log, any time in the app.
+- **Profiles.** Save your app rules, allowlist, and custom block
+  entries under a name — Home, Kids, Strict — and switch between
+  them. The block lists are shared by every profile; a profile is
+  your choices on top of them. While a profile is active, editing
+  those rules edits the profile too, so a profile never silently
+  drifts from what it does.
+- **The status notification asks once.** On Android 13 and later,
+  the first time you turn Sphinx on, Android asks whether it may
+  show notifications. If you say no, the filter still works exactly
+  the same — only the shade notification is missing — and the app
+  says so, with where to change it, instead of asking again.
+- **Start on boot is your choice, and off until you make it.** If
+  you turn it on, and Sphinx was running when the phone shut down,
+  it starts again after the restart — same mode, same rules. If
+  you had turned Sphinx off, it stays off.
+- **Battery honesty.** Android's battery saver can put apps to
+  sleep, and a sleeping filter filters nothing. The app shows
+  whether Sphinx is exempt from battery optimization and offers
+  Android's own settings screen so *you* can exempt it — Sphinx
+  never changes that setting itself. And if the filter does stop,
+  the app shows it as off. It never pretends to be protecting you
+  when it isn't.
 
 ## What Sphinx cannot do — stated plainly
 
@@ -89,6 +111,10 @@ resolver and the answer comes right back.
   the block lasts. Android's routing is per-interface, not per-app;
   there is no third shape that does both, and the app says this
   where the rule is set.
+- **Android can still put it to sleep.** Unless you exempt Sphinx
+  from battery optimization (your choice, in the app), an
+  aggressive battery mode can stop the filter. When that happens
+  Sphinx is simply off — the app shows it as off.
 
 ## Editions
 
@@ -108,19 +134,21 @@ plan is public and honest — not because they're ready.
 
 ## Status
 
-This is **Phase 3: the filter, plus per-app rules and custom block
-entries — not a finished product.** The DNS filter runs on a bundled
-71,491-domain list, updates itself from public list sources when you
-tap the button (with a sanity check and an atomic swap, so a bad
-download can never wipe your protection), honors your allowlist, and
-keeps a short on-device query log. Phase 3 adds your own custom
-block entries; per-app rules (exempt an app from filtering, or block
-an app outright — with the trade stated plainly above); and per-app
-drop counters, so you can watch a blocked app being stopped. A
-polished release build is still on the [roadmap](docs/ROADMAP.md).
-Nothing here is a finished public release yet — under Sentinel's
-standing rule, no release ships before it passes an independent
-audit.
+This is **Phase 4: the Android edition is feature-complete per the
+[roadmap](docs/ROADMAP.md) — and still not a finished product.**
+The DNS filter runs on a bundled 71,491-domain list, updates itself
+from public list sources when you tap the button (with a sanity
+check and an atomic swap, so a bad download can never wipe your
+protection), honors your allowlist, and keeps a short on-device
+query log. On top of that: your own custom block entries; per-app
+rules (exempt an app from filtering, or block an app outright —
+with the trade stated plainly above); per-app drop counters;
+profiles; an opt-in start on boot; and plain battery handling.
+What remains before a public release is the release gate, not
+more features: a signed release build and an independent audit of
+the whole edition — fix, then re-audit — with published checksums.
+Nothing here is a finished public release yet, and under Sentinel's
+standing rule, nothing ships before that gate passes.
 
 ## Building
 

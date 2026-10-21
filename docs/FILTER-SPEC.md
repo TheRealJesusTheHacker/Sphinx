@@ -107,6 +107,42 @@ effect by restarting the interface through the same shutdown/start
 path as a stop followed by a start — there is no third, half-applied
 state.
 
+## Profiles
+
+An edition may let the user save their own rule state under a
+name — a *profile* — and switch between profiles. A profile
+captures exactly the user's own choices:
+
+- the per-app rules,
+- the allowlist,
+- the custom block entries.
+
+A profile never captures the blocklists or their sources: every
+profile questions with the same lists, so switching profiles
+cannot change which lists are in force, and a list update never
+disturbs a profile.
+
+The mechanism's rules, so every edition behaves the same:
+
+- **Switching is a copy, applied by restart.** Switching writes
+  the profile's state into the live stores and applies it by
+  restarting the filter through the ordinary shutdown/start path
+  (the per-app rules rule above — no third, half-applied state).
+  The snapshot itself is only read by a switch, never modified.
+- **The active profile does not drift.** While a profile is
+  active, edits to the live rule state are edits to that profile
+  too (written through by the store), so what a profile says is
+  always what it does.
+- **Profiles degrade; they never destroy.** Profile storage uses
+  the same discipline as list storage — entries normalized
+  through the parser's rails, files replaced atomically. A
+  malformed profile file degrades to the profiles that parse —
+  worst case, none — and never to a wiped live ruleset: the live
+  state changes only when the user explicitly switches.
+- **Deleting a profile deletes only the snapshot.** The live
+  rules stay as they are; if the deleted profile was active, the
+  rules simply stop being under a profile.
+
 ## Sinkhole behavior (blocked queries)
 
 A blocked query is answered locally and never leaves the device:
@@ -192,6 +228,35 @@ blocked app is gone, the population would be empty — and an empty
 allowlist with a default route would capture the whole phone — so
 the interface runs in filter mode until the rules once again name
 an installed app.
+
+## Staying on: notifications, boot, battery
+
+A filter that is off protects no one, and a filter that *claims*
+to be on while stopped is worse than off. An edition's status
+display therefore reflects the real filter state, never the
+desired one, and staying on follows these rules:
+
+- **Notifications inform; they are never the protection.** Where
+  the platform wants the user's permission for notifications
+  (Android 13+: POST_NOTIFICATIONS, declared since Phase 1), the
+  edition asks at most once, at the moment the user first turns
+  the filter on. A refusal changes nothing about filtering; the
+  edition states plainly that the status notification won't
+  appear and where to re-enable it — and does not ask again.
+- **Boot auto-start is opt-in and honors intent.** An edition may
+  restart the filter after a reboot only when the user turned
+  that setting on AND the filter was on when the device shut
+  down — the user's recorded on/off intent, not process state.
+  It comes up through the ordinary start path, in the mode the
+  stored rules produce. If a platform consent the filter needs
+  (Android's VPN consent) is not in place, boot does nothing:
+  no UI, no prompts from a background receiver.
+- **Battery exemption is the user's decision.** Where platform
+  battery management can stop the filter (Android's battery
+  optimization), the edition explains the risk in plain language,
+  shows whether it is currently exempt, and offers the
+  platform's own settings path so the user decides. It never
+  forces or changes the setting itself.
 
 ## Honesty rules baked into the design
 

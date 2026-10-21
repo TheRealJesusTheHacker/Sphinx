@@ -115,16 +115,61 @@ reproduced by the bundled-list test in the suite.
   app-block mode does capture a blocked app's IPv6 traffic (and
   drop it), which is capture, not filtering.
 
-### Android Phase 4 — Polish
+### Android Phase 4 — Polish (landed)
 
-- Notification permission flow on Android 13+: Phase 1 declares
-  POST_NOTIFICATIONS but never asks, so on newer Android the status
-  notification only appears in the foreground-service list, not the
-  notification shade. Ask, with a plain-language reason.
-- Auto-start on boot (opt-in), quick-settings tile.
-- Profiles (e.g. Home / Kids / Aggressive) with per-profile lists.
-- Battery handling: keep the filter cheap, batch list updates, honor
-  Android power management without silently dropping protection.
+- **Notification permission flow.** Phase 1 declared
+  POST_NOTIFICATIONS but never asked, so on Android 13+ the status
+  notification missed the shade. The app now asks exactly once, at
+  the moment the user first turns the filter on; a refusal is
+  recorded, never re-asked, and explained in place (what is
+  missing — the shade status only — and where to re-enable it).
+  The filter itself is unaffected either way.
+- **Auto-start on boot (opt-in, off by default).** A
+  BOOT_COMPLETED receiver restarts the filter after a reboot only
+  when the user opted in AND the filter was on at shutdown — the
+  service records the user's on/off intent at every genuine start
+  and stop, and boot honors the intent, not process state. The
+  start goes through the ordinary ACTION_START path, so the
+  booted filter runs in the capture mode the stored rules
+  produce; with no VPN consent in place it does nothing (no UI
+  from a receiver, ever).
+- **Profiles (e.g. Home / Kids / Aggressive).** A profile
+  captures the user's rule state — per-app rules, allowlist,
+  custom block entries (FILTER-SPEC.md, "Profiles"). Switching
+  copies the snapshot into the live stores and applies it through
+  the audited ACTION_RESTART path; edits to the live state write
+  through to the active profile, so a profile never drifts from
+  what it does. **Deviation from this section's original line,
+  stated plainly:** profiles do not carry per-profile blocklists
+  or sources — the lists are shared across profiles. The lists
+  are the product's shared brain-data, updated under the atomic
+  swap discipline; per-profile lists would let a profile silently
+  run a stale or user-forgotten list, and switching would become
+  a list change in disguise. What differs between profiles is
+  the user's own choices, and those are all captured.
+- **Battery handling.** The app shows whether Sphinx is exempt
+  from battery optimization and, when it isn't, offers Android's
+  own per-app settings dialog (falling back to the settings list)
+  so the user decides — the app never forces or changes the
+  setting. The status display keeps reflecting the real service
+  state: a filter the battery saver stopped shows as off, never
+  as protecting. List updates stay manual-only (FILTER-SPEC's
+  no-silent-fetching rule), so the original "batch list updates"
+  thought does not apply and was not built.
+- **Not built in this phase, stated plainly:** the
+  quick-settings tile from this section's original line. The
+  main-screen toggle and the notification's stop action cover
+  the same need for now; the tile stays on the future-work list
+  below rather than shipping unexamined in a polish phase.
+
+The Android edition is **feature-complete** with Phase 4. What
+remains before a public release is the release gate (below):
+a signed release build with a reproducible recipe, an
+independent audit of the complete Android edition — fix, then
+re-audit — and published SHA256SUMS verified by re-download.
+Known future work that is **not** part of the gate (and must not
+be claimed until built): IPv6 DNS filtering, a connection log
+beyond DNS, and a quick-settings tile.
 
 ---
 
