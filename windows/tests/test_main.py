@@ -89,6 +89,59 @@ def test_unelevated_restore_changes_nothing(tmp_path):
     assert manager.get_dns("Wi-Fi", "IPv4") == ["127.0.0.1"]
 
 
+class TestTryClaimServer:
+    """W-7: QLocalServer.removeServer must be gated — a claim
+    attempt may only clear the channel name after its own listen
+    failed AND a second probe also failed. Unconditional removal
+    before every claim could clear a live host's channel when
+    that host's probe merely timed out under load."""
+
+    class FakeServer:
+        def __init__(self, results, created):
+            self._results = results
+            created.append(self)
+
+        def listen(self, name):
+            return self._results.pop(0)
+
+    def _claim(self, results, probe):
+        from sphinx_win.app.main import try_claim_server
+
+        created = []
+        removed = []
+        server = try_claim_server(
+            lambda: self.FakeServer(results, created),
+            lambda name: removed.append(name),
+            probe,
+            "Sphinx-test",
+        )
+        return server, created, removed
+
+    def test_first_listen_success_never_removes_or_reprobes(self):
+        probes = []
+        server, created, removed = self._claim(
+            [True], lambda: probes.append(True) or True
+        )
+        assert server is created[0]
+        assert removed == [] and probes == []
+
+    def test_failed_listen_with_a_live_host_never_removes(self):
+        server, created, removed = self._claim([False], lambda: True)
+        assert server is None
+        assert removed == []  # a live host answers: its name stays
+        assert len(created) == 1
+
+    def test_failed_listen_and_failed_probe_clears_the_leftover(self):
+        server, created, removed = self._claim([False, True], lambda: False)
+        assert removed == ["Sphinx-test"]
+        assert server is created[1]  # a fresh server claimed it
+
+    def test_still_unclaimable_after_clearing_gives_up(self):
+        server, created, removed = self._claim([False, False], lambda: False)
+        assert server is None
+        assert removed == ["Sphinx-test"]
+
+
 class TestAcquireInstance:
     """The one-host-per-user claim (Windows Phase 2 audit): two
     launches in the same instant can both probe before either

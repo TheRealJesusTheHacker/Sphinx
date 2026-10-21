@@ -99,6 +99,36 @@ def restore_dns_main(data_dir=None, manager_factory=None, out=print) -> int:
     return 0 if result.ok else 3
 
 
+def try_claim_server(make_server, remove_server, probe_connect, name):
+    """One claim attempt on the single-instance channel.
+
+    ``make_server()`` builds a fresh (unlistened) local server,
+    ``remove_server(name)`` clears a channel name, and
+    ``probe_connect()`` asks a running host to show its window.
+
+    Clearing the name is GATED (Sweep #3, W-7): the name is
+    removed only after this attempt's own listen has failed AND a
+    second probe has also failed. The old shape removed the name
+    unconditionally before every claim; on platforms where
+    removal is not a no-op, a live host whose probe merely timed
+    out under load could have its channel cleared from under it
+    by a second launch, which would then claim the name and run
+    as a rival host. With the gate, a failed listen followed by a
+    host answering the re-probe returns None here, and
+    acquire_instance's loop turns this launch into a "show"; only
+    a name nobody answers for — a crashed host's leftover — is
+    cleared, and the claim is retried once with a fresh server.
+    """
+    candidate = make_server()
+    if candidate.listen(name):
+        return candidate
+    if probe_connect():
+        return None
+    remove_server(name)
+    candidate = make_server()
+    return candidate if candidate.listen(name) else None
+
+
 def acquire_instance(probe_connect, try_listen, *, attempts=3,
                      pause_s=0.2, sleep=time.sleep):
     """Decide this launch's role in the one-host-per-user rule.
@@ -173,9 +203,12 @@ def main(argv=None) -> int:
         return True
 
     def try_listen():
-        candidate = QLocalServer()
-        QLocalServer.removeServer(name)  # clear a crashed host's leftover
-        return candidate if candidate.listen(name) else None
+        # The claim is gated (see try_claim_server): a crashed
+        # host's leftover is cleared only after a failed listen
+        # and a failed second probe — never unconditionally.
+        return try_claim_server(
+            QLocalServer, QLocalServer.removeServer, probe_connect, name
+        )
 
     role, server = acquire_instance(probe_connect, try_listen)
     if role == "show":
