@@ -201,9 +201,14 @@ class SphinxVpnService : VpnService() {
                 socket.send(DatagramPacket(query, query.size))
                 val buffer = ByteArray(MAX_PACKET)
                 // Accept only the answer to *this* query: matching ID,
-                // QR (response) bit set. Anything else is ignored while
-                // the timeout runs — the same discipline every stub
-                // resolver applies. (FILTER-SPEC.md, forwarding rules.)
+                // QR (response) bit set. Anything else is ignored — the
+                // same discipline every stub resolver applies
+                // (FILTER-SPEC.md, forwarding rules). The 3-second
+                // budget covers the whole wait, not each datagram:
+                // soTimeout is per-receive, so a stream of mismatched
+                // packets must not be able to stretch it forever.
+                val deadlineNanos =
+                    System.nanoTime() + UPSTREAM_TIMEOUT_MS * 1_000_000L
                 while (true) {
                     val response = DatagramPacket(buffer, buffer.size)
                     socket.receive(response)
@@ -214,6 +219,9 @@ class SphinxVpnService : VpnService() {
                         if (responseId == queryId && isResponse) {
                             return buffer.copyOf(response.length)
                         }
+                    }
+                    if (System.nanoTime() > deadlineNanos) {
+                        throw java.net.SocketTimeoutException("no matching response in time")
                     }
                 }
             } catch (e: Exception) {
