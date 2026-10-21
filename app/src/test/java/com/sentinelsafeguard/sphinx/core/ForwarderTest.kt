@@ -237,4 +237,23 @@ class ForwarderTest {
             elapsedMs < 2600,
         )
     }
+
+    // --- A-3: the receive buffer holds a full-size DNS message. ---
+
+    @Test
+    fun receiveBufferIsFullDnsMessageSize() {
+        assertEquals(65535, DnsForwarder.MAX_PACKET)
+    }
+
+    @Test
+    fun oversizedUpstreamResponseIsNotSilentlyTruncated() {
+        val fake = fakeUdp()
+        val q = query("example.com")
+        val big = response(q, totalSize = 40000)
+        fake.start { s, data, addr, port -> sendTo(s, response(data, totalSize = 40000), addr, port) }
+        val answer = DnsForwarder.forwardQuery(q, listOf("127.0.0.1"), 3000, fake.port)
+        assertNotNull(answer)
+        assertEquals(40000, answer!!.size)
+        assertArrayEquals(big, answer)
+    }
 }

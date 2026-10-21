@@ -36,7 +36,11 @@ object DnsForwarder {
 
     const val DNS_PORT = 53
     const val UPSTREAM_TIMEOUT_MS = 3000
-    const val MAX_PACKET = 32767
+    /** A full-size DNS message: the largest a UDP datagram can be.
+     *  A smaller receive buffer would silently truncate an
+     *  oversized upstream answer and forward the corrupt remainder
+     *  as if it were genuine — the Python editions use 65,535 too. */
+    const val MAX_PACKET = 65535
 
     val UPSTREAM_RESOLVERS = listOf("1.1.1.1", "9.9.9.9")
 

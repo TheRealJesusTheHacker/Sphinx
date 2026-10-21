@@ -87,7 +87,7 @@ class SphinxVpnService : VpnService() {
         private const val CHANNEL_ID = "sphinx_status"
         private const val NOTIFICATION_ID = 1
         private const val UPSTREAM_TIMEOUT_MS = 3000
-        private const val MAX_PACKET = 32767
+        private const val MAX_PACKET = 65535
         private const val OWNER_CACHE_CAP = 512
         private const val OWNER_CACHE_TTL_NANOS = 60_000_000_000L // 60 s
         private const val WORK_QUEUE_CAP = 512
