@@ -218,6 +218,27 @@ class TestBackupValidation:
         assert guard.detect_state() is DnsState.LEFTOVER
 
 
+class TestReengageMessage:
+    """W-5: re-engaging against an existing backup where every
+    switchable adapter is already at loopback and some families
+    are skipped used to build "DNS points at Sphinx on ." — an
+    empty adapter list in a success sentence."""
+
+    def test_reengage_message_names_the_adapters_already_at_loopback(
+        self, tmp_path
+    ):
+        guard, manager = make_guard(tmp_path)
+        first = guard.engage(only_loopbacks={"127.0.0.1"})
+        assert first.ok
+        second = guard.engage(only_loopbacks={"127.0.0.1"})
+        assert second.ok
+        assert "on ." not in second.message
+        assert second.message.startswith("DNS points at Sphinx on ")
+        assert "Wi-Fi" in second.message and "Ethernet" in second.message
+        # The skipped family is still reported honestly.
+        assert "IPv6" in second.message and "left unchanged" in second.message
+
+
 class TestPartialFamilyEngage:
     """Engage may be restricted to the loopbacks the filter proved
     it answers on: unproven families are recorded but never moved,

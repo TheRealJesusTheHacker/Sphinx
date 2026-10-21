@@ -240,12 +240,14 @@ class DnsGuard:
                 )
 
         changed: List[AdapterDns] = []
+        already: List[AdapterDns] = []
         skipped: List[AdapterDns] = []
         for adapter in targets:
             if not switchable(adapter):
                 skipped.append(adapter)
                 continue
             if self._at_loopback(adapter):
+                already.append(adapter)
                 continue  # already engaged (a re-engage after a crash)
             loopback = LOOPBACK_FOR_FAMILY[adapter.family]
             try:
@@ -284,11 +286,20 @@ class DnsGuard:
                 )
             if not skipped:
                 return EngageResult(True, "DNS already points at Sphinx.", [])
-        message = (
-            "DNS points at Sphinx on "
-            + ", ".join(sorted({a.interface_alias for a in changed}))
-            + "."
+        # The success sentence names every adapter DNS points at
+        # Sphinx on — the ones just changed AND the ones already at
+        # loopback. Naming only `changed` built "DNS points at
+        # Sphinx on ." on a re-engage where nothing needed changing
+        # (Sweep #3, W-5).
+        engaged_names = sorted(
+            {a.interface_alias for a in changed + already}
         )
+        if engaged_names:
+            message = (
+                "DNS points at Sphinx on " + ", ".join(engaged_names) + "."
+            )
+        else:
+            message = "DNS already points at Sphinx."
         if skipped:
             families = ", ".join(sorted({a.family for a in skipped}))
             message += (
