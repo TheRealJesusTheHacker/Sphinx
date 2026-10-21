@@ -38,10 +38,18 @@ class ControlClient:
     def __init__(self, socket_path: Path, timeout: float = 3.0):
         self._path = Path(socket_path)
         self._timeout = timeout
+        #: Why the last request failed, when it did: "permission"
+        #: (the socket exists but this user may not use it — it is
+        #: mode 0660, owned by the daemon's user and group) or
+        #: "unreachable" (no daemon there). Callers use this to tell
+        #: the truth instead of reporting a running daemon as absent.
+        #: (Debian Phase 1 audit, finding 3.)
+        self.last_error: Optional[str] = None
 
     def request(self, payload: dict) -> Optional[dict]:
         """One request/response round trip; None when the daemon is
         not reachable (not running, or the socket is not its)."""
+        self.last_error = None
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(self._timeout)
@@ -53,7 +61,11 @@ class ControlClient:
                     if not chunk:
                         break
                     chunks.extend(chunk)
+        except PermissionError:
+            self.last_error = "permission"
+            return None
         except OSError:
+            self.last_error = "unreachable"
             return None
         try:
             line = bytes(chunks).split(b"\n", 1)[0]

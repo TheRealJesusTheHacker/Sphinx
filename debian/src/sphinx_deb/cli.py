@@ -137,6 +137,22 @@ def _cmd_status(_args: argparse.Namespace) -> int:
             f"{stats.get('blocked', 0):,} blocked, "
             f"{stats.get('allowed', 0):,} let through"
         )
+    elif service is True and client.last_error == "permission":
+        # The daemon is up (systemd says so) but its control socket
+        # is mode 0660 for the daemon's user/group and root — an
+        # unprivileged status cannot read the counters, and must not
+        # report a running filter as "not answering". (Debian
+        # Phase 1 audit, finding 3.)
+        print(
+            "  Filter: running — but its counters live on a control "
+            "socket only root and the sphinx group can read. Run "
+            "'sudo sphinx status' for the counters."
+        )
+    elif service is True:
+        print(
+            "  Filter: the service is running but is not answering "
+            "its control socket, so its counters cannot be read."
+        )
     else:
         size = _installed_list_size()
         if size is not None:

@@ -61,3 +61,19 @@ def test_no_daemon_is_none_not_a_guess(tmp_path):
     client = ControlClient(control_socket_path(tmp_path))
     assert client.stats() is None
     assert client.proof("127.0.0.1") is False
+
+
+def test_permission_denied_is_distinguished_from_absent(tmp_path, monkeypatch):
+    # Audit finding 3: the installed socket is mode 0660 (daemon
+    # user/group + root). An unprivileged caller gets EACCES, which
+    # must not be reported as "the daemon is not there".
+    import sphinx_deb.control as control_mod
+
+    class DeniedSocket:
+        def __init__(self, *a, **k):
+            raise PermissionError("denied (fake)")
+
+    monkeypatch.setattr(control_mod.socket, "socket", DeniedSocket)
+    client = ControlClient(control_socket_path(tmp_path))
+    assert client.stats() is None
+    assert client.last_error == "permission"
