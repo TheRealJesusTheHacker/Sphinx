@@ -246,10 +246,64 @@ Starts after the Android core lands.
   docs/AUDITS.md. CI artifacts were downloaded and re-verified
   (checksums, PE, portable layout).
 
-Still ahead for this edition: the installer, HUD polish in the
-fleet's final style, a tray/service host, and the release gate
-below (independent audit → fix → re-audit before any public
-release).
+### Windows Phase 2 — Tray host, start-at-sign-in, installer (landed)
+
+- **Hosting shape: a tray-resident host process**, chosen over a
+  true Windows Service and recorded here as the decision it is.
+  One process owns the window, the tray icon, the filter server,
+  and the DNS guard, so the backup/restore record the Phase 1
+  audit proved has exactly one owner, in the user's own session —
+  a SYSTEM service would split that ownership across a process
+  boundary (and a state store both sides must agree on) for the
+  single benefit of elevation without a prompt. The service
+  question can be revisited if that trade ever changes; the
+  Phase 1 audit's gates were inherited unchanged either way.
+- **The window is a view, not the app.** Closing it hides it to
+  the tray and stops nothing; the tray menu carries the real
+  (read-back) status, Open, Turn on/off, Restart-as-administrator,
+  and Quit — and Quit runs the audited stop, refused when a
+  restore fails, exactly as Phase 1's window close did (that close
+  discipline remains the fallback on a desktop with no tray). A
+  second launch never starts a rival host: a per-user
+  single-instance channel hands "show" to the running host.
+- **Start-at-sign-in** is the standard per-user Run value — one
+  value, written by the installer's option or the app's checkbox
+  alike (the checkbox shows the registry's actual state). Resume
+  follows the recorded-intent discipline: the controller records
+  intent at every successful start, stop, and leftover resolution
+  (and at no failed transition), and a sign-in launch resumes only
+  when intent is on — through the same prove-first engagement,
+  against the *existing* record when the machine is found still
+  engaged. Leftover and unknown states are surfaced, never
+  auto-handled. The honest friction, documented rather than
+  designed away: a sign-in program cannot silently elevate, so a
+  resume may put up exactly one UAC prompt; the
+  `--elevated-attempted` marker guarantees a declined prompt is
+  never retried in a loop, and the host then waits in the tray,
+  off, saying so. The pure decision table (`app/host.py`) and the
+  autostart policy (`app/autostart.py`) are unit-tested off
+  Windows; the tray shell is smoke-tested headlessly.
+- **Installer:** Inno Setup (`packaging/Sphinx.iss`), compiled in
+  CI next to the portable zip. Its uninstaller runs the new
+  headless `Sphinx.exe --restore-dns` mode from
+  `InitializeUninstall` — before any file is removed — and aborts
+  with a plain-language explanation when the restore cannot be
+  verified, so an uninstall can never strand a machine on a dead
+  resolver; the sign-in value is removed with the install, and the
+  user's data folder is deliberately left in place. The script's
+  load-bearing promises are pinned by tests; an end-to-end
+  install → engage → uninstall pass on a real machine is
+  release-gate work, stated as such in windows/README.md.
+- **No dnsmgmt behavior changed.** Hosting consumed the audited
+  guard/controller contracts as they stood; the only controller
+  changes are recording intent at the transitions it already
+  owned, each pinned by regression tests. Suite: 153 tests
+  (PySide6 environment) at the Phase 2 HEAD.
+
+Still ahead for this edition: HUD polish in the fleet's final
+style, the release gate below (independent audit → fix → re-audit
+before any public release), and — only if the hosting trade ever
+changes — a true service host.
 
 ## Edition 3 — Debian/Linux
 

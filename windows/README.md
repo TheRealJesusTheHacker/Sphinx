@@ -4,15 +4,20 @@ The Windows edition of Sphinx: the same filtering brain as every
 edition (the shared rules in [../docs/FILTER-SPEC.md](../docs/FILTER-SPEC.md)),
 running as a local DNS filter on this machine.
 
-**Status: Phase 1 — the core filter service, landed.** The filter,
-the list engine, the system-DNS engagement with its restore
-discipline, and a plain functional window exist and are tested. What
-does *not* exist yet: an installer, HUD polish, a system-tray host,
-and a background Windows service — Phase 1 runs as an app you keep
-open (closing the window stops the filter cleanly, restoring DNS
-first). The release gate in the roadmap (independent audit → fix →
-re-audit, signed builds, published checksums) has not run for this
-edition; nothing here is a finished public release.
+**Status: Phase 2 — the tray host, start-at-sign-in, and the
+installer, landed.** Phase 1's filter, list engine, system-DNS
+engagement with its restore discipline, and plain functional window
+exist and passed an independent audit (see
+[../docs/AUDITS.md](../docs/AUDITS.md)). Phase 2 hosts all of it in
+a system-tray process so the filter no longer needs the window open,
+adds an opt-in start-at-sign-in under the recorded-intent
+discipline, and ships an installer alongside the portable edition.
+What does *not* exist yet: HUD polish, and a background Windows
+*service* (Phase 2's host is a tray process — the section below
+says why, plainly). The release gate in the roadmap (independent
+audit → fix → re-audit, signed builds, published checksums) has
+not run for this edition; nothing here is a finished public
+release.
 
 ## How it works
 
@@ -69,6 +74,69 @@ Before DNS is pointed at the filter, the filter must prove it
 answers on each loopback it bound; before that proof, nothing about
 the machine's DNS changes.
 
+## The tray host, start-at-sign-in, and the installer (Phase 2)
+
+**The host is a tray process, not a Windows service — on purpose.**
+One process owns the window, the tray icon, the filter, and the
+DNS engagement, so the saved-settings record the discipline above
+depends on has exactly one owner, in one session, under the
+user's own account; nothing about it has to cross a process
+boundary. A separate service would split that ownership (a SYSTEM
+service holding state the per-user UI must somehow share) for the
+one benefit of prompting-free elevation — and the cost of that
+benefit is stated below rather than hidden. Closing the window
+sends it to the tray and stops *nothing*; the tray menu shows the
+real status (read from the machine, not assumed), opens the
+window, turns the filter on or off, and its **Quit** is what stops
+Sphinx — running the same verified stop as Phase 1's close did (a
+failed restore refuses the quit, in the tray as at the window).
+Starting Sphinx a second time doesn't start a rival host: it asks
+the running one to show its window. On a desktop with no system
+tray, the window is the app again and Phase 1's close discipline
+applies unchanged.
+
+**Start-at-sign-in** uses the standard per-user Run entry — the
+same one value whether the installer's option or the app's own
+"Start Sphinx when I sign in" checkbox wrote it (off by default;
+the checkbox always shows the value actually in the registry). A
+sign-in start resumes protection only under the recorded-intent
+discipline the Android edition uses: Sphinx records your intent at
+every successful turn-on, turn-off, and leftover resolution, and
+at sign-in it resumes only if protection was on — passing the same
+prove-it-answers-first engagement as a manual start. If the
+machine is found still engaged (a restart while protection was
+on), the host resumes against the *existing* saved record; a
+leftover or an unrecognized loopback DNS is surfaced for your own
+decision, never handled silently.
+
+The one friction, stated plainly: resuming means changing DNS,
+which needs administrator rights, and a program that starts at
+sign-in cannot silently grant itself those rights. So on a sign-in
+start that needs to resume, Sphinx asks once, through the standard
+Windows prompt. Approve it and protection is back; decline it and
+Sphinx waits in the tray, off, saying exactly that — with a
+"Restart as administrator" action in the window and the tray menu
+whenever you want it.
+
+**The installer** (`SphinxSetup.exe`, built by CI from
+`packaging/Sphinx.iss`) installs the same one-file exe the
+portable edition carries — the two editions behave identically;
+the installer just adds the Start-menu entry, the optional sign-in
+option, and an uninstaller. Uninstalling is part of the restore
+discipline: before removing anything, the uninstaller runs
+`Sphinx.exe --restore-dns`, which puts back the saved settings and
+retires the record only when the restore verifies; **if the
+restore cannot be verified, the uninstall stops and explains,
+rather than leave the machine pointing at a filter that no longer
+exists.** The sign-in entry is removed; your data folder
+(lists, entries, settings) is left in place — removing the app
+must not quietly delete your data. Stated ceiling: the installer
+is compiled and its script pinned by tests in CI, but an
+install → engage → uninstall pass on a real machine belongs to
+the edition's release gate, alongside the other real-Windows
+proofs — it has not happened yet, and this README won't pretend
+otherwise.
+
 ## Lists
 
 The same brain-data as the Android edition: the bundled StevenBlack
@@ -100,9 +168,11 @@ both; from source, `~/.sphinx`.
 ## Building
 
 `packaging/build-portable.ps1` produces `dist\Sphinx.exe` (one
-file), `dist\SphinxPortable.zip`, and `dist\SHA256SUMS.txt`. The
-GitHub Actions workflow `.github/workflows/sphinx-windows.yml` runs
-the tests and this build on windows-latest for every change under
+file), `dist\SphinxPortable.zip`, and — when Inno Setup is
+installed — `dist\SphinxSetup.exe` (from `packaging/Sphinx.iss`),
+with `dist\SHA256SUMS.txt` over all of them. The GitHub Actions
+workflow `.github/workflows/sphinx-windows.yml` runs the tests and
+all three builds on windows-latest for every change under
 `windows/` — that workflow is the edition's build gate.
 
 ## Honest limits, Windows edition
@@ -118,6 +188,10 @@ the tests and this build on windows-latest for every change under
   the engagement; turning Sphinx off and on re-engages against the
   adapters then in force. The status line always shows the real
   state.
+- Resuming protection after a restart needs one approval of the
+  standard administrator prompt when Sphinx starts at sign-in (see
+  the Phase 2 section above). Declining it leaves protection off —
+  never silently half-on — until you start Sphinx as administrator.
 - Per-app rules are an Android-edition feature (they ride on
   Android's per-app VPN routing); the Windows Phase 1 scope is the
   DNS filter the roadmap's Edition 2 section describes.

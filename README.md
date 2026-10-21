@@ -126,16 +126,21 @@ the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md
 2. **Windows (SPHINX.EXE)** — a local DNS filter listening on loopback
    (127.0.0.1 and ::1) that the system DNS is pointed at while it
    runs, under a save-first / restore-exactly discipline for the
-   machine's original DNS settings. One-file exe plus a portable
-   edition; an installer follows. *In build — Phase 1 (core filter
-   service) has landed; see [windows/README.md](windows/README.md).*
+   machine's original DNS settings. Hosted by a system-tray process
+   (closing the window doesn't stop it), with an opt-in
+   start-at-sign-in that resumes protection under the same intent
+   discipline as the Android edition. One-file exe, a portable
+   edition, and an installer whose uninstaller restores your DNS
+   settings before it removes anything. *In build — Phases 1–2
+   (core filter service; tray host, start-at-sign-in, installer)
+   have landed; see [windows/README.md](windows/README.md).*
 3. **Debian/Linux** — a local DNS-filter daemon (systemd service),
    shipped as a .deb. *Planned — not started.*
 4. Further platforms as feasible after those three.
 
-The Android and Windows editions exist today; the Windows edition is
-a Phase 1 build, not a release. The others are named here so the plan
-is public and honest — not because they're ready.
+The Android and Windows editions exist today; neither is a finished
+release yet. The others are named here so the plan is public and
+honest — not because they're ready.
 
 ## Status
 

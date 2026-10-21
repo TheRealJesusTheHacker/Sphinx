@@ -302,6 +302,28 @@ The Windows edition engages by configuration, not by tunnel:
 - The filter must prove it answers on a loopback before DNS is
   pointed at it; a machine is never aimed at a resolver that isn't
   answering.
+- One process owns the machine's DNS state: the tray-resident host
+  holds the filter, the window, and the engage/restore discipline,
+  so the record has exactly one owner and no inter-process
+  negotiation can split it. Closing the window is not stopping the
+  filter; quitting runs the same verified stop as turning it off.
+- Start-at-sign-in (opt-in, off by default) resumes protection
+  only under the recorded-intent discipline the Android edition's
+  boot start uses: protection resumes if it was on at the last
+  successful transition — and a machine found still engaged at
+  start is resumed against its *existing* record, never re-saved
+  over. A leftover or an unknown loopback is surfaced for the
+  user's own decision, never handled automatically. Resuming needs
+  the same administrator rights as engaging; a sign-in program
+  cannot silently elevate, so the host may ask exactly once — if
+  the ask is declined, it waits, stating plainly that protection
+  is off until rights are granted.
+- Uninstalling is part of the restore discipline: the saved
+  settings are restored (and verified) before any file is removed;
+  if the restore cannot be verified, the uninstall aborts rather
+  than leave the machine pointing at a removed filter. The saved
+  record is removed only by a verified restore — never by the
+  uninstaller reaching into the data folder.
 
 ## Honesty rules baked into the design
 
