@@ -76,6 +76,28 @@
         </service>
 
         <!--
+          The quick-settings tile. BIND_QUICK_SETTINGS_TILE means
+          only the Android system can bind to it. The tile toggles
+          the filter through the service's existing ACTION_START /
+          ACTION_STOP intents (respecting VPN consent — without it,
+          a tap opens the app instead of starting anything), and
+          its label/icon are the app's own name and mark.
+        -->
+        <service
+            android:name=".tile.SphinxTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_sphinx"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
+
+        <!--
           Phase 4 boot auto-start (opt-in). BOOT_COMPLETED is a
           protected broadcast — only the Android system can send
           it — so exported=true here admits the system, not other
