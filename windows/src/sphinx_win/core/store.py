@@ -255,6 +255,33 @@ class Store:
         text = "".join(n + "\n" for n in normalized)
         write_atomically(self.custom_block_file, text.encode("utf-8"))
 
+    # --- Hosting settings (Windows Phase 2) ----------------------------
+
+    def protection_intent(self) -> bool:
+        """The recorded on/off intent: True when protection was on
+        the last time Sphinx's state changed hands cleanly. The
+        controller records it at every successful start, stop, and
+        leftover restore/dismissal — the same intent discipline the
+        Android edition's boot auto-start honors — and the tray host
+        reads it at sign-in to decide whether protection should
+        resume. Default False: a machine Sphinx has never run on has
+        no intent to resume anything."""
+        return bool(self._get("protection_intent", False))
+
+    def set_protection_intent(self, on: bool) -> None:
+        self._set("protection_intent", bool(on))
+
+    def autostart_enabled(self) -> bool:
+        """The user's recorded opt-in to starting Sphinx at sign-in.
+        This is the *record* of the choice; the machine's truth is
+        the per-user Run registry value, which the app shell reads
+        and reconciles against this on every start (the shell's
+        checkbox shows the registry's actual state)."""
+        return bool(self._get("autostart_enabled", False))
+
+    def set_autostart_enabled(self, enabled: bool) -> None:
+        self._set("autostart_enabled", bool(enabled))
+
     # --- Query log setting ------------------------------------------------
 
     def query_log_enabled(self) -> bool:

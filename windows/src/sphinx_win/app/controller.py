@@ -15,6 +15,13 @@ Stop order is the mirror: restore DNS first, and only stop the
 server once the restore verifies. If the restore fails, the filter
 keeps running and the failure is reported — a live filter with a
 restore still owed beats a dead resolver.
+
+The controller also records the user's protection intent in the
+store at every successful start, stop, and leftover resolution —
+the fact the tray host's start-at-sign-in logic honors (Windows
+Phase 2), mirroring the Android edition's recorded intent. A failed
+start or stop records nothing: the intent stays whatever the last
+*successful* transition made it.
 """
 from __future__ import annotations
 
@@ -129,6 +136,7 @@ class SphinxController:
             raise StartError(result.message)
         self.server = server
         self.running = True
+        self.store.set_protection_intent(True)
         return result.message
 
     def stop(self) -> str:
@@ -147,6 +155,7 @@ class SphinxController:
             self.server.stop()
             self.server = None
         self.running = False
+        self.store.set_protection_intent(False)
         return result.message
 
     def restore_dns(self) -> str:
@@ -156,7 +165,19 @@ class SphinxController:
         result = self.guard.disengage()
         if not result.ok:
             raise StartError(result.message)
+        self.store.set_protection_intent(False)
         return result.message
+
+    def dismiss_leftover(self) -> bool:
+        """Dismiss a leftover backup at the user's say-so (they have
+        checked the current settings themselves). Changes no
+        settings; records that protection is off by the user's own
+        action, so a later sign-in does not resurrect an engagement
+        the user has already dealt with."""
+        dismissed = self.guard.dismiss_leftover()
+        if dismissed:
+            self.store.set_protection_intent(False)
+        return dismissed
 
     def dns_state(self) -> DnsState:
         return self.guard.detect_state()

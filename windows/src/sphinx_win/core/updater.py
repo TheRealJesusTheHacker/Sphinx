@@ -38,7 +38,7 @@ READ_TIMEOUT_S = 30.0
 MAX_LIST_BYTES = 32 * 1024 * 1024
 MAX_REDIRECTS = 5
 REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
-USER_AGENT = "Sphinx/0.1 (Windows blocklist update)"
+USER_AGENT = "Sphinx/0.2 (Windows blocklist update)"
 
 
 @dataclass(frozen=True)

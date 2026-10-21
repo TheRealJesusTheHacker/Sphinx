@@ -124,6 +124,56 @@ class TestPartialBind:
         assert manager.get_dns("Wi-Fi", "IPv6") == []
 
 
+class TestIntentRecording:
+    """Windows Phase 2: the controller records the protection intent
+    the tray host's sign-in resume honors — at successful transitions
+    only, never at failed ones."""
+
+    def test_start_and_stop_record_intent(self, tmp_path):
+        controller, _, _ = make_controller(tmp_path)
+        assert controller.store.protection_intent() is False
+        controller.start()
+        assert controller.store.protection_intent() is True
+        controller.stop()
+        assert controller.store.protection_intent() is False
+
+    def test_failed_start_records_nothing(self, tmp_path):
+        controller, _, _ = make_controller(tmp_path, answers=False)
+        with pytest.raises(StartError):
+            controller.start()
+        assert controller.store.protection_intent() is False
+
+    def test_failed_stop_keeps_intent_on(self, tmp_path):
+        controller, manager, _ = make_controller(tmp_path)
+        controller.start()
+        manager.fail_on_set.add(("Wi-Fi", "IPv4"))
+        with pytest.raises(StartError):
+            controller.stop()
+        # Protection is still on, so the intent still says on.
+        assert controller.store.protection_intent() is True
+
+    def test_leftover_restore_and_dismiss_record_off(self, tmp_path):
+        controller, manager, _ = make_controller(tmp_path)
+        controller.start()
+        assert controller.store.protection_intent() is True
+        # Simulate a crash + hand fix: DNS no longer points at the
+        # filter, the backup remains — a leftover.
+        manager.set_dns("Wi-Fi", "IPv4", ["192.168.1.1"])
+        manager.set_dns("Wi-Fi", "IPv6", [])
+        assert controller.dns_state() is DnsState.LEFTOVER
+        assert controller.dismiss_leftover() is True
+        assert controller.store.protection_intent() is False
+
+    def test_hosting_settings_round_trip(self, tmp_path):
+        controller, _, _ = make_controller(tmp_path)
+        store = controller.store
+        assert store.autostart_enabled() is False
+        store.set_autostart_enabled(True)
+        assert store.autostart_enabled() is True
+        store.set_protection_intent(True)
+        assert store.protection_intent() is True
+
+
 class TestLogToggle:
     def test_turning_recording_off_does_not_erase_the_log(self, tmp_path):
         controller, _, _ = make_controller(tmp_path)
