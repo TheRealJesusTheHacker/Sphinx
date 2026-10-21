@@ -1,7 +1,8 @@
 """Where Sphinx keeps its lists on the machine, and how the working
 set is chosen — a port of the Android edition's ``lists/ListStore.kt``
-(the list parts; per-app rules and profiles are Android-edition
-features, not shared store state).
+(the list parts, and — since Windows Phase 3 — its profiles: the
+profile store behavior mirrors the Android store's, audit fixes
+included).
 
 All storage is under one app data directory chosen by the app shell.
 Nothing here leaves the device.
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Collection, List, Optional
 
 from .blocklist import Allowlist, Blocklist, FilterLists, normalize_entry, parse_entries
+from .profiles import Profile, ProfileSet, RuleState, is_valid_profile_name
 from .validation import DEFAULT_SOURCES, ListSource, is_acceptable_url, parse_and_validate
 from . import validation as _validation
 
@@ -83,6 +85,8 @@ class Store:
       <dir>/lists/<sha256(url)[:16]>.txt   downloaded list copies
       <dir>/allowlist.txt                  the user's allowlist
       <dir>/custom-block.txt               the user's own block entries
+      <dir>/profiles.txt                   named profiles of the two
+                                           rule files above (Phase 3)
       <dir>/state.json                     sources, last update, settings
     """
 
@@ -92,6 +96,7 @@ class Store:
         self.lists_dir.mkdir(parents=True, exist_ok=True)
         self.allowlist_file = self.data_dir / "allowlist.txt"
         self.custom_block_file = self.data_dir / "custom-block.txt"
+        self.profiles_file = self.data_dir / "profiles.txt"
         self.state_file = self.data_dir / "state.json"
         if bundled_list_path is None:
             bundled_list_path = Path(__file__).resolve().parent.parent / "data" / BUNDLED_LIST_NAME
@@ -226,13 +231,15 @@ class Store:
             )
         )
 
-    def save_allowlist(self, entries: Collection[str]) -> None:
+    def save_allowlist(self, entries: Collection[str], *, sync_profile: bool = True) -> None:
         # Entry validation, not mere normalization: an entry the
         # loader would drop (single label, reserved name) must not be
         # stored as if it were in force.
         normalized = sorted({n for n in (normalize_entry(e) for e in entries) if n})
         text = "".join(n + "\n" for n in normalized)
         write_atomically(self.allowlist_file, text.encode("utf-8"))
+        if sync_profile:
+            self._sync_active_profile()
 
     # --- Custom block entries -------------------------------------------
 
@@ -250,10 +257,121 @@ class Store:
         exactly what the matcher honors."""
         return sorted(self._custom_block_domain_set())
 
-    def save_custom_block_entries(self, entries: Collection[str]) -> None:
+    def save_custom_block_entries(
+        self, entries: Collection[str], *, sync_profile: bool = True
+    ) -> None:
         normalized = sorted({n for n in (normalize_entry(e) for e in entries) if n})
         text = "".join(n + "\n" for n in normalized)
         write_atomically(self.custom_block_file, text.encode("utf-8"))
+        if sync_profile:
+            self._sync_active_profile()
+
+    # --- Profiles (Windows Phase 3) -----------------------------------
+    #
+    # A port of the Android store's profile behavior
+    # (lists/ListStore.kt, Phase 4 there) — including the two
+    # disciplines its audit pinned: live edits write through to the
+    # active profile, and a switch's own writes never do (see
+    # switch_profile).
+
+    def load_profile_set(self) -> ProfileSet:
+        """The stored profiles, or an empty set when none were ever
+        saved. A malformed profiles file degrades to the profiles
+        that parse — never to a wiped live ruleset, because profiles
+        and live state are different files, and the live state
+        changes only through switch_profile."""
+        if not self.profiles_file.is_file():
+            return ProfileSet()
+        return ProfileSet.parse(
+            self.profiles_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        )
+
+    def _save_profile_set(self, profile_set: ProfileSet) -> None:
+        text = "".join(line + "\n" for line in profile_set.serialize_lines())
+        write_atomically(self.profiles_file, text.encode("utf-8"))
+
+    def snapshot_live_state(self) -> RuleState:
+        """The live rule state, read back from the live stores —
+        what a profile snapshot is taken of."""
+        return RuleState(
+            allowlist_entries=self.allowlist_entries(),
+            custom_block_entries=self.custom_block_entries(),
+        )
+
+    def create_profile(self, name: str) -> Optional[ProfileSet]:
+        """Save the live rule state as a new profile called ``name``
+        and make it the active profile. Returns the updated set, or
+        None when the name is unusable or already taken."""
+        clean = name.strip()
+        if not is_valid_profile_name(clean):
+            return None
+        profile_set = self.load_profile_set()
+        if profile_set.profile(clean) is not None:
+            return None
+        updated = profile_set.with_profile(
+            Profile(clean, self.snapshot_live_state())
+        ).with_active(clean)
+        self._save_profile_set(updated)
+        return updated
+
+    def switch_profile(self, name: str) -> bool:
+        """Make the profile called ``name`` the live rule state.
+        Its snapshot is only *read*, never modified, by a switch —
+        and the snapshot itself is never where the state lands
+        first: the live stores are written (without the
+        write-through sync), then the active marker is set from a
+        fresh read of the profiles file. That order is the Android
+        Phase 4 audit's fix: if a switch's live writes ran the
+        edit sync, each would write the *incoming* state into the
+        *outgoing* profile's snapshot on disk, and a crash anywhere
+        mid-switch would leave the outgoing profile silently
+        replaced by the incoming one. Returns False when no such
+        profile exists (nothing changes then).
+
+        Applying the switch to a *running* filter is the caller's
+        step: the controller's reload_lists(), the ordinary reload
+        path — the switch is not in force until that runs (a switch
+        that changed files but not the running filter's lists
+        would be the half-applied state FILTER-SPEC forbids)."""
+        profile_set = self.load_profile_set()
+        profile = profile_set.profile(name)
+        if profile is None:
+            return False
+        self._write_live_state(profile.state)
+        self._save_profile_set(self.load_profile_set().with_active(profile.name))
+        return True
+
+    def delete_profile(self, name: str) -> bool:
+        """Remove the profile called ``name``. The live rule state
+        is untouched; if the removed profile was active, the active
+        marker clears with it — the rules simply stop being under
+        a profile. Returns False when no such profile exists."""
+        profile_set = self.load_profile_set()
+        if profile_set.profile(name) is None:
+            return False
+        self._save_profile_set(profile_set.without_profile(name))
+        return True
+
+    def _write_live_state(self, state: RuleState) -> None:
+        """Write a profile snapshot into the live stores, without
+        the write-through sync — see switch_profile for why a
+        switch must never sync."""
+        self.save_allowlist(state.allowlist_entries, sync_profile=False)
+        self.save_custom_block_entries(state.custom_block_entries, sync_profile=False)
+
+    def _sync_active_profile(self) -> None:
+        """Write the live rule state through to the active profile,
+        if there is one — the profile is the configuration, so an
+        edit made under it belongs to it. Called after every live
+        rule save; writes only the profiles file, so it cannot
+        recurse."""
+        profile_set = self.load_profile_set()
+        active = profile_set.active_profile
+        if active is None:
+            return
+        self._save_profile_set(
+            profile_set.with_profile(Profile(active.name, self.snapshot_live_state()))
+        )
 
     # --- Hosting settings (Windows Phase 2) ----------------------------
 
