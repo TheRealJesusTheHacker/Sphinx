@@ -47,6 +47,14 @@ Debian specifics, stated rather than hidden:
   values is how machines lose DNS.
 - Intent (the recorded on/off decision) is written only at
   successful transitions.
+- Resumption (Phase 2): the resolved stack's engagement is
+  runtime state, so a reboot or a moved default route leaves a
+  leftover with intent still on. Re-engaging is this same
+  engage() — proof first, then point — never a silent re-point:
+  against the recorded originals when the recorded link still
+  carries the route, and retargeted onto the link that carries
+  it now when it does not (see _retarget_resolved for how that
+  stays inside the never-re-save rule).
 """
 from __future__ import annotations
 
@@ -475,6 +483,7 @@ class DnsGuard:
         engaged_loopbacks = [proven[f] for f in (FAMILY_V4, FAMILY_V6) if f in proven]
 
         existing = self.load_backup()
+        reengage_note = ""
         if existing is not None:
             # A leftover: re-engage against the recorded originals.
             # The record on disk stays the truth — never re-saved.
@@ -490,6 +499,31 @@ class DnsGuard:
                 )
             record = existing
             record.engaged_loopbacks = engaged_loopbacks
+            reengage_note = " (Re-engaged against the settings saved earlier.)"
+            if existing.stack == STACK_RESOLVED:
+                current_link = self._view.default_link()
+                if current_link and current_link != existing.link:
+                    # The default route moved to another link while
+                    # Sphinx was on (or the machine came back up on a
+                    # different connection): the recorded link's
+                    # override is dead runtime state, and pointing
+                    # the OLD link again would protect nothing — the
+                    # Phase 1 audit's link-change lesson, applied to
+                    # the re-engage itself. Retarget the engagement
+                    # onto the link that carries the traffic now.
+                    retargeted = self._retarget_resolved(
+                        existing, current_link, engaged_loopbacks
+                    )
+                    if isinstance(retargeted, EngageResult):
+                        return retargeted
+                    record = retargeted
+                    reengage_note = (
+                        f" (The connection carrying this machine's "
+                        f"traffic changed from {existing.link} to "
+                        f"{current_link} while Sphinx was on; Sphinx "
+                        f"undid its setting on the old connection "
+                        f"and saved the new connection's settings.)"
+                    )
         else:
             record = self._gather_originals(stack, engaged_loopbacks)
             if isinstance(record, EngageResult):
@@ -540,9 +574,89 @@ class DnsGuard:
                 f" {missing} DNS was left unchanged — the filter is "
                 f"not answering on that family's loopback."
             )
-        if existing is not None:
-            message += " (Re-engaged against the settings saved earlier.)"
+        if reengage_note:
+            message += reengage_note
         return EngageResult(True, message, engaged_loopbacks)
+
+    def _retarget_resolved(
+        self, existing: BackupRecord, current_link: str, engaged_loopbacks: List[str]
+    ):
+        """Move a resolved-stack engagement whose link lost the
+        default route onto the link that carries it now. Returns the
+        new BackupRecord (saved and verified), or an EngageResult
+        refusing — with nothing changed that the refusal doesn't
+        name.
+
+        The order is the fleet's throughout:
+
+        1. Read the new link's current servers first. A loopback
+           among them is an original Sphinx cannot record — refuse,
+           with nothing touched at all.
+        2. Undo Sphinx's own stale override on the recorded link
+           (``resolvectl revert``) and verify no Sphinx loopback
+           remains there. Only once the old engagement no longer
+           exists in the world may a new record replace it on disk:
+           the never-re-save rule guards a *live* engagement's
+           originals, and this step retires exactly that engagement,
+           verifiably, before anything is saved.
+        3. Save the new link's record, verified by read-back — the
+           same toll as a fresh engage. The caller then points,
+           verifies, and proves through the ordinary path; a failure
+           there rolls the new link back and keeps this record,
+           which describes a real, restorable state.
+        """
+        prior = self._view.link_dns(current_link)
+        if any(is_loopback(s) for s in prior):
+            return EngageResult(
+                False,
+                f"The connection carrying this machine's traffic now "
+                f"({current_link}) already points at a resolver on "
+                "this machine, and Sphinx has no record of its "
+                "previous settings, so it will not take it over. The "
+                "saved record was kept and nothing was changed.",
+                [],
+            )
+        try:
+            self._view.revert_link(existing.link)
+        except Exception as exc:
+            return EngageResult(
+                False,
+                f"Sphinx could not undo its setting on the earlier "
+                f"connection ({existing.link}): {exc}. Nothing else "
+                "was changed and the saved record was kept — try "
+                "again, or sudo sphinx restore to finish turning "
+                "Sphinx off.",
+                [],
+            )
+        still = [
+            s for s in self._view.link_dns(existing.link) if s in SPHINX_LOOPBACKS
+        ]
+        if still:
+            return EngageResult(
+                False,
+                f"The earlier connection ({existing.link}) still "
+                "points at Sphinx after the attempt to undo it, so "
+                "the engagement was not moved. The saved record was "
+                "kept and nothing else was changed.",
+                [],
+            )
+        record = BackupRecord(
+            stack=STACK_RESOLVED,
+            engaged_loopbacks=engaged_loopbacks,
+            link=current_link,
+            prior_servers=prior,
+        )
+        if not self._save_backup_verified(record):
+            return EngageResult(
+                False,
+                f"Sphinx undid its setting on the earlier connection "
+                f"({existing.link}), but could not save the new "
+                f"connection's ({current_link}) settings verifiably, "
+                "so it pointed nothing. Run sphinx status to see the "
+                "state, then try sudo sphinx engage again.",
+                [],
+            )
+        return record
 
     def _gather_originals(self, stack: Stack, engaged_loopbacks: List[str]):
         """Build the record of the machine's current settings, or an
