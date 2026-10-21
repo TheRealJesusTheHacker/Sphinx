@@ -29,6 +29,65 @@ def test_signin_entry_is_the_apps_own_value_and_removed_on_uninstall():
     assert "uninsdeletevalue" in ISS
 
 
+PACKAGING = Path(__file__).resolve().parent.parent / "packaging"
+SPEC = (PACKAGING / "Sphinx.spec").read_text(encoding="utf-8")
+
+
+class TestInstallerBranding:
+    """R-17: the installer and the exe carry the canonical Sphinx
+    mark. Cosmetic only — these pins hold the assets' presence,
+    formats, and references, nothing about behavior."""
+
+    def test_icon_asset_is_a_multi_size_ico(self):
+        data = (PACKAGING / "sphinx.ico").read_bytes()
+        assert data[:4] == b"\x00\x00\x01\x00"  # ICO magic + type=icon
+        count = int.from_bytes(data[4:6], "little")
+        assert count >= 4
+        sizes = {
+            (data[6 + i * 16] or 256) for i in range(count)
+        }  # width byte; 0 means 256
+        assert {16, 48, 256} <= sizes  # small, taskbar, and large
+
+    def test_wizard_assets_are_bmps_of_innos_sizes(self):
+        import struct
+
+        for name, expected in (
+            ("wizard-image.bmp", (164, 314)),
+            ("wizard-small.bmp", (55, 55)),
+        ):
+            data = (PACKAGING / name).read_bytes()
+            assert data[:2] == b"BM"
+            width, height = struct.unpack_from("<ii", data, 18)
+            assert (width, abs(height)) == expected
+
+    def test_wizard_assets_use_no_purple(self):
+        # Palette rule (theme.py): basalt, sandstone, bronze —
+        # purple belongs to Beerus alone. Decode the 24-bit BMP
+        # pixel data and refuse any pixel whose blue channel
+        # meaningfully exceeds its red (every palette blend keeps
+        # red >= blue, up to resampling noise on near-black).
+        import struct
+
+        for name in ("wizard-image.bmp", "wizard-small.bmp"):
+            data = (PACKAGING / name).read_bytes()
+            offset = struct.unpack_from("<I", data, 10)[0]
+            width, height = struct.unpack_from("<ii", data, 18)
+            row = ((width * 3 + 3) // 4) * 4  # rows are 4-aligned
+            for y in range(abs(height)):
+                base = offset + y * row
+                for x in range(width):
+                    b, g, r = data[base + x * 3 : base + x * 3 + 3]
+                    assert b - r <= 16, (name, x, y, (r, g, b))
+
+    def test_spec_embeds_the_icon(self):
+        assert 'icon=str(WINDOWS_DIR / "packaging" / "sphinx.ico")' in SPEC
+
+    def test_iss_references_the_branding_assets(self):
+        assert "SetupIconFile=sphinx.ico" in ISS
+        assert "WizardImageFile=wizard-image.bmp" in ISS
+        assert "WizardSmallImageFile=wizard-small.bmp" in ISS
+
+
 def test_installer_version_matches_the_package():
     from sphinx_win import __version__
 

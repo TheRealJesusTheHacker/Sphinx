@@ -39,6 +39,11 @@ exe = EXE(
     a.datas,
     [],
     name="Sphinx",
+    # The canonical Sphinx mark (the eye from the Android edition's
+    # launcher icon, in the theme palette: basalt stone, bronze),
+    # shipped as a binary asset beside this spec (R-17). Cosmetic
+    # only — it brands the exe, the shortcuts, and the taskbar.
+    icon=str(WINDOWS_DIR / "packaging" / "sphinx.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

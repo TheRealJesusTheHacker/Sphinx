@@ -43,6 +43,14 @@ PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 UninstallDisplayName=Sphinx (Sentinel Safeguard)
+; Branding (R-17, cosmetic only): the canonical Sphinx mark — the
+; eye from the Android edition's launcher icon, in the palette
+; from windows/src/sphinx_win/app/theme.py (basalt black,
+; sandstone, bronze; no purple). The .ico also brands Sphinx.exe
+; itself through packaging\Sphinx.spec.
+SetupIconFile=sphinx.ico
+WizardImageFile=wizard-image.bmp
+WizardSmallImageFile=wizard-small.bmp
 
 [Tasks]
 Name: "startatlogin"; Description: "Start Sphinx automatically when I sign in"; GroupDescription: "Startup:"; Flags: unchecked
