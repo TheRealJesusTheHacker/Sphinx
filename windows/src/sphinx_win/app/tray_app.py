@@ -8,8 +8,12 @@ on-device query log. Phase 2 keeps that window and adds the host:
 a system-tray icon whose process owns the filter, so closing the
 window no longer stops protection — the window closes to the tray,
 and only the tray's Quit (or the window's own stop, while it is the
-only surface) runs the audited stop. Functional, not pretty — HUD
-polish is a later phase, like every other tool in the fleet had.
+only surface) runs the audited stop. Phase 3 restyles the window
+and tray in the Sphinx palette (app/theme.py — basalt, sandstone,
+bronze-gold; presentation only, no behavior moved) and adds the
+Profiles section: named snapshots of the allowlist + custom
+entries, with the store's write-through and switch discipline
+behind them.
 
 Honesty rules wired in, not just written down:
 - The status line reflects the real filter/DNS state, never the
@@ -38,8 +42,10 @@ from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -48,14 +54,17 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
+from ..core.profiles import is_valid_profile_name
 from ..core.updater import ListUpdater
 from ..core.validation import ListSource, is_acceptable_url
 from ..dnsmgmt.guard import DnsState
+from . import theme
 from .autostart import AutostartManager
 from .controller import SphinxController, StartError
 from .host import (
@@ -67,17 +76,26 @@ from .host import (
 )
 
 
-def sphinx_icon() -> QIcon:
+def sphinx_icon(state: str = "off") -> QIcon:
     """The tray/window icon, drawn rather than shipped as a file:
-    a gold S on near-black — one less asset to keep in step."""
+    an S in a stone tablet — one less asset to keep in step. The
+    ring and letter take the state's color from the palette
+    (app/theme.py): dulled bronze while off, bronze-gold while on,
+    the fleet's danger red when the machine needs the user
+    ("attention"). The window icon keeps the resting state; the
+    tray icon follows the real state."""
+    ring = {
+        "on": theme.BRONZE,
+        "attention": theme.DANGER,
+    }.get(state, theme.BRONZE_MUTED)
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(16, 24, 31))
-    painter.setPen(QPen(QColor(201, 162, 39), 3))
+    painter.setBrush(QColor(theme.ICON_FACE))
+    painter.setPen(QPen(QColor(ring), 3))
     painter.drawRoundedRect(4, 4, 56, 56, 10, 10)
-    painter.setPen(QColor(201, 162, 39))
+    painter.setPen(QColor(theme.BRONZE_SOFT if state == "on" else ring))
     font = QFont()
     font.setBold(True)
     font.setPixelSize(36)
@@ -95,24 +113,33 @@ class MainWindow(QMainWindow):
         self._host: Optional["TrayHost"] = None
         self.setWindowTitle("Sphinx — Sentinel Safeguard")
         self.setWindowIcon(sphinx_icon())
-        self.resize(560, 760)
+        self.resize(600, 820)
 
-        root = QWidget()
-        layout = QVBoxLayout(root)
-        self.setCentralWidget(root)
+        # One scrolling column in the fleet's HUD shape; the
+        # stylesheet (app/theme.py) is applied by the entry point.
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(12)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(content)
+        self.setCentralWidget(scroll)
 
-        title = QLabel("Sphinx")
-        title.setStyleSheet("font-size: 22px; font-weight: bold;")
+        title = QLabel("SPHINX")
+        title.setObjectName("wordmark")
         layout.addWidget(title)
         tagline = QLabel("Every request gets questioned.")
+        tagline.setObjectName("tagline")
         layout.addWidget(tagline)
 
         self.status_label = QLabel("")
+        self.status_label.setObjectName("statusLine")
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("font-size: 14px;")
         layout.addWidget(self.status_label)
 
         self.leftover_box = QGroupBox("Saved DNS settings found")
+        self.leftover_box.setObjectName("attention")
         leftover_layout = QVBoxLayout(self.leftover_box)
         leftover_text = QLabel(
             "Sphinx holds this machine's previous DNS settings, but "
@@ -135,6 +162,7 @@ class MainWindow(QMainWindow):
 
         controls = QHBoxLayout()
         self.toggle_button = QPushButton("Turn Sphinx on")
+        self.toggle_button.setObjectName("primary")
         self.toggle_button.clicked.connect(self._on_toggle)
         controls.addWidget(self.toggle_button)
         self.counter_label = QLabel("Blocked: 0   Allowed: 0")
@@ -208,6 +236,38 @@ class MainWindow(QMainWindow):
             controller.store.custom_block_entries(),
             self._save_custom,
         )
+
+        profiles_box = QGroupBox("Profiles")
+        profiles_layout = QVBoxLayout(profiles_box)
+        self.profile_status_label = QLabel("")
+        self.profile_status_label.setWordWrap(True)
+        profiles_layout.addWidget(self.profile_status_label)
+        profile_pick = QHBoxLayout()
+        self.profile_combo = QComboBox()
+        profile_pick.addWidget(self.profile_combo)
+        self.profile_switch_button = QPushButton("Use profile")
+        self.profile_switch_button.clicked.connect(self._on_switch_profile)
+        profile_pick.addWidget(self.profile_switch_button)
+        profiles_layout.addLayout(profile_pick)
+        profile_actions = QHBoxLayout()
+        self.profile_create_button = QPushButton("Save rules as new profile…")
+        self.profile_create_button.clicked.connect(self._on_create_profile)
+        profile_actions.addWidget(self.profile_create_button)
+        self.profile_delete_button = QPushButton("Delete profile")
+        self.profile_delete_button.clicked.connect(self._on_delete_profile)
+        profile_actions.addWidget(self.profile_delete_button)
+        profiles_layout.addLayout(profile_actions)
+        profile_note = QLabel(
+            "A profile saves your allowlist and your own block "
+            "entries under a name. The blocklists themselves are "
+            "the same under every profile — switching never changes "
+            "which lists are in force. While a profile is active, "
+            "edits to the two editors above are saved into it too."
+        )
+        profile_note.setWordWrap(True)
+        profiles_layout.addWidget(profile_note)
+        layout.addWidget(profiles_box)
+        self._refresh_profiles_ui()
 
         log_box = QGroupBox("Recent lookups (on this device only, in memory)")
         log_layout = QVBoxLayout(log_box)
@@ -290,6 +350,145 @@ class MainWindow(QMainWindow):
     def _save_custom(self, entries):
         self.controller.store.save_custom_block_entries(entries)
         self.controller.reload_lists()
+
+    # --- Profiles (Phase 3) ---------------------------------------------
+    #
+    # The dialog-free helpers (create_profile_named and friends)
+    # are the behavior; the _on_* handlers only ask the user and
+    # report. A switch writes the snapshot into the live stores
+    # (the store's audited sequence) and then applies ALL of it to
+    # the running filter through the controller's ordinary reload —
+    # never a files-only switch the filter hasn't heard about.
+
+    def _refresh_entry_editors(self):
+        """Re-read both entry editors from the live stores (after
+        a profile switch changed what "live" is)."""
+        for widget, entries in (
+            (self.allow_editor, self.controller.store.allowlist_entries()),
+            (self.custom_editor, self.controller.store.custom_block_entries()),
+        ):
+            widget.clear()
+            widget.addItems(entries)
+
+    def _refresh_profiles_ui(self, select: Optional[str] = None):
+        profile_set = self.controller.store.load_profile_set()
+        names = [p.name for p in profile_set.profiles]
+        current = select or self.profile_combo.currentText()
+        self.profile_combo.blockSignals(True)
+        self.profile_combo.clear()
+        self.profile_combo.addItems(names)
+        if current in names:
+            self.profile_combo.setCurrentText(current)
+        elif profile_set.active_name in names:
+            self.profile_combo.setCurrentText(profile_set.active_name)
+        self.profile_combo.blockSignals(False)
+        if profile_set.active_name:
+            self.profile_status_label.setText(
+                f"Active profile: {profile_set.active_name} — edits to "
+                "the allowlist and your own block entries are saved "
+                "into it."
+            )
+        elif names:
+            self.profile_status_label.setText(
+                "No profile is active — the rules above aren't saved "
+                "under a name."
+            )
+        else:
+            self.profile_status_label.setText("No profiles yet.")
+        has_profiles = bool(names)
+        self.profile_combo.setEnabled(has_profiles)
+        self.profile_switch_button.setEnabled(has_profiles)
+        self.profile_delete_button.setEnabled(has_profiles)
+
+    def create_profile_named(self, name: str) -> bool:
+        """Save the live rules as a new profile and make it active.
+        False when the name is unusable or already taken."""
+        if self.controller.store.create_profile(name) is None:
+            return False
+        self._refresh_profiles_ui(select=name.strip())
+        return True
+
+    def switch_profile_named(self, name: str) -> bool:
+        """Switch the live rules to the named profile and apply
+        them whole to the running filter. False when no such
+        profile exists (nothing changes then)."""
+        if not self.controller.store.switch_profile(name):
+            return False
+        self.controller.reload_lists()
+        self._refresh_entry_editors()
+        self._refresh_profiles_ui(select=name.strip())
+        self._refresh(force_state=True)
+        return True
+
+    def delete_profile_named(self, name: str) -> bool:
+        """Delete the named profile's snapshot. The live rules are
+        untouched; if it was the active profile, they simply stop
+        being under a profile."""
+        if not self.controller.store.delete_profile(name):
+            return False
+        self._refresh_profiles_ui()
+        return True
+
+    def _on_create_profile(self):
+        name, ok = QInputDialog.getText(
+            self,
+            "New profile",
+            "Save the current allowlist and block entries as a "
+            "profile named:",
+        )
+        if not ok:
+            return
+        if not is_valid_profile_name(name):
+            QMessageBox.warning(
+                self,
+                "That name can't be used",
+                "Profile names are 1–40 characters of ordinary text. "
+                "Nothing was saved.",
+            )
+            return
+        if not self.create_profile_named(name):
+            QMessageBox.warning(
+                self,
+                "Profile not saved",
+                "A profile with that name already exists. Nothing "
+                "was changed.",
+            )
+            return
+        self.profile_status_label.setText(
+            f"Profile “{name.strip()}” saved and active."
+        )
+
+    def _on_switch_profile(self):
+        name = self.profile_combo.currentText()
+        if not name:
+            return
+        if self.switch_profile_named(name):
+            self.profile_status_label.setText(
+                f"Sphinx now uses profile “{name}” — its rules are "
+                "in force."
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Profile not switched",
+                "That profile no longer exists. Nothing was changed.",
+            )
+            self._refresh_profiles_ui()
+
+    def _on_delete_profile(self):
+        name = self.profile_combo.currentText()
+        if not name:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete profile",
+            f"Delete the profile “{name}”? The rules currently in "
+            "force stay exactly as they are — only the saved copy "
+            "goes.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.delete_profile_named(name)
 
     # --- Filter toggle --------------------------------------------------
 
@@ -515,7 +714,16 @@ class MainWindow(QMainWindow):
             state is DnsState.LEFTOVER and not self.controller.running
         )
         if self._host is not None:
-            self._host.update(self.status_label.text(), self.controller.running)
+            # The tray icon's third state: the machine needs the
+            # user — a leftover or an unrecorded loopback to decide
+            # on, or a filter running while DNS no longer points at
+            # it. Presentation only; the status text is unchanged.
+            attention = state in (DnsState.LEFTOVER, DnsState.UNKNOWN) or (
+                self.controller.running and state is not DnsState.ENGAGED
+            )
+            self._host.update(
+                self.status_label.text(), self.controller.running, attention
+            )
 
         if self.controller.store.query_log_enabled():
             entries = engine.query_log.snapshot()
@@ -693,9 +901,12 @@ class TrayHost:
         ):
             self._show_window()
 
-    def update(self, status_text: str, running: bool) -> None:
+    def update(
+        self, status_text: str, running: bool, attention: bool = False
+    ) -> None:
         """The window's refresh pushes its (real, read) status here,
-        so the tray never claims a state the window hasn't read."""
+        so the tray never claims a state the window hasn't read —
+        the icon's state color comes from the same read."""
         if self._status_action is not None:
             self._status_action.setText(status_text)
         if self._toggle_action is not None:
@@ -705,6 +916,11 @@ class TrayHost:
         if self.tray_icon is not None:
             self.tray_icon.setToolTip(
                 "Sphinx — on" if running else "Sphinx — off"
+            )
+            self.tray_icon.setIcon(
+                sphinx_icon(
+                    "attention" if attention else ("on" if running else "off")
+                )
             )
 
     def notify(self, text: str) -> None:

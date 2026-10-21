@@ -134,11 +134,15 @@ def main(argv=None) -> int:
     from PySide6.QtWidgets import QApplication
 
     from sphinx_win.app.autostart import AutostartManager, WindowsRunRegistry
+    from sphinx_win.app.theme import stylesheet
     from sphinx_win.app.tray_app import MainWindow, TrayHost
 
     app = QApplication(sys.argv)
     app.setApplicationName("Sphinx")
     app.setOrganizationName("Sentinel Safeguard")
+    # The Sphinx palette (basalt, sandstone, bronze-gold) — one
+    # application-wide stylesheet, Phase 3. Presentation only.
+    app.setStyleSheet(stylesheet())
     # The tray is the app's home now: closing every window must not
     # quit the host (the window's close goes to the tray instead).
     app.setQuitOnLastWindowClosed(False)
