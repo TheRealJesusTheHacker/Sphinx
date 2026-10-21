@@ -4,6 +4,7 @@ the record when a restore fails, and treat "nothing held" as
 success. Plus the single-instance acquisition (same module): the
 probe→claim race must not produce a rival host."""
 from sphinx_win.app.main import acquire_instance, restore_dns_main
+from sphinx_win.core.store import Store
 from sphinx_win.dnsmgmt.base import AdapterDns
 from sphinx_win.dnsmgmt.fake import FakeDnsManager
 from sphinx_win.dnsmgmt.guard import DnsGuard
@@ -31,6 +32,33 @@ def test_restore_puts_back_the_originals(tmp_path):
     assert code == 0
     assert manager.get_dns("Wi-Fi", "IPv4") == ["192.168.1.1"]
     assert guard.load_backup() is None  # record retired on verified restore
+
+
+def test_verified_restore_records_protection_intent_off(tmp_path):
+    # W-1: the headless restore is a successful stop transition, so
+    # it must record intent off exactly like controller.restore_dns
+    # does — otherwise a later --autostart launch sees DISENGAGED +
+    # intent on and re-engages DNS the user explicitly restored.
+    manager, guard = engaged_manager(tmp_path)
+    Store(tmp_path).set_protection_intent(True)
+    code = restore_dns_main(
+        data_dir=tmp_path, manager_factory=lambda: manager, out=lambda *a: None
+    )
+    assert code == 0
+    assert guard.load_backup() is None
+    assert Store(tmp_path).protection_intent() is False
+
+
+def test_failed_restore_keeps_protection_intent_on(tmp_path):
+    manager, guard = engaged_manager(tmp_path)
+    Store(tmp_path).set_protection_intent(True)
+    manager.fail_on_set.add(("Wi-Fi", "IPv4"))
+    code = restore_dns_main(
+        data_dir=tmp_path, manager_factory=lambda: manager, out=lambda *a: None
+    )
+    assert code == 3
+    assert guard.load_backup() is not None
+    assert Store(tmp_path).protection_intent() is True
 
 
 def test_nothing_held_is_success(tmp_path):

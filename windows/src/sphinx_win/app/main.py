@@ -67,8 +67,9 @@ def build_controller(data_dir: Path) -> SphinxController:
 def restore_dns_main(data_dir=None, manager_factory=None, out=print) -> int:
     """The headless restore: if Sphinx holds saved DNS settings,
     put them back (the guard verifies each one and retires the
-    record only on a verified restore); if it holds none, there is
-    nothing to do and that is success. Exit code 3 means the
+    record only on a verified restore, and records protection
+    intent off, like every successful stop); if it holds none,
+    there is nothing to do and that is success. Exit code 3 means the
     restore could not be completed — the record is kept, and the
     message says why. Used by the installer's uninstaller, which
     aborts rather than strand a machine when this fails."""
@@ -80,6 +81,14 @@ def restore_dns_main(data_dir=None, manager_factory=None, out=print) -> int:
             out("Sphinx holds no saved DNS settings; nothing to restore.")
             return 0
         result = guard.disengage()
+        if result.ok:
+            # A verified restore is a successful stop transition:
+            # record protection intent off on the same data dir,
+            # exactly as controller.restore_dns() does. Without
+            # this, a later --autostart launch would see DISENGAGED
+            # + intent on and re-engage DNS the user explicitly
+            # restored here (Sweep #3, W-1).
+            Store(data_dir).set_protection_intent(False)
     except NotElevatedError as e:
         out(str(e))
         return 3
