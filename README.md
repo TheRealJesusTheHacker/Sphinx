@@ -36,6 +36,11 @@ resolver and the answer comes right back.
   decrypt, or read the contents of your HTTPS connections.
 - **Phase 1 filters IPv4 DNS.** IPv6 filtering is on the roadmap; on an
   IPv6-only path, lookups can pass around the filter today.
+- **Apps with built-in encrypted DNS can walk around it.** Some apps
+  and browsers do their own encrypted lookups (DNS-over-HTTPS —
+  Chrome calls it "secure DNS") and never ask the phone's resolver,
+  so Sphinx never sees those queries. Turning that feature off in the
+  app puts its lookups back where Sphinx can question them.
 - **It uses the phone's one VPN slot.** While Sphinx is on, a separate
   VPN app can't run at the same time — Android allows one VPN at a time.
 

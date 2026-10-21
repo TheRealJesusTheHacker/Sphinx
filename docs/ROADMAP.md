@@ -63,6 +63,10 @@ reset when the service stops; the starter list is small and static.
 
 ### Android Phase 4 — Polish
 
+- Notification permission flow on Android 13+: Phase 1 declares
+  POST_NOTIFICATIONS but never asks, so on newer Android the status
+  notification only appears in the foreground-service list, not the
+  notification shade. Ask, with a plain-language reason.
 - Auto-start on boot (opt-in), quick-settings tile.
 - Profiles (e.g. Home / Kids / Aggressive) with per-profile lists.
 - Battery handling: keep the filter cheap, batch list updates, honor
