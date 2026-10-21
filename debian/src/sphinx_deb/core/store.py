@@ -64,6 +64,22 @@ def write_atomically(target: Path, data: bytes) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_name(target.name + ".tmp")
     temp.write_bytes(data)
+    # The mode is set explicitly, never left to the writer's umask:
+    # the only writer is the command running as root, and the only
+    # reader that matters is the daemon running as the unprivileged
+    # sphinx user. A restrictive root umask (027 is a common
+    # hardening default) would otherwise leave every store file
+    # 0640 root:root — the CLI would happily write rules the daemon
+    # cannot read, and the filter would be blind to them (Debian
+    # Phase 2 audit). Store files hold rules and lists, never
+    # secrets or query data, so 0644 is the right mode, and the
+    # state directory itself is 0755 for the same reason (see
+    # packaging/postinst).
+    try:
+        os.chmod(temp, 0o644)
+        os.chmod(target.parent, 0o755)
+    except OSError:
+        pass
     try:
         os.replace(temp, target)
         return
@@ -72,6 +88,10 @@ def write_atomically(target: Path, data: bytes) -> None:
     swap = target.with_name(target.name + ".swap")
     try:
         shutil.copyfile(temp, swap)
+        try:
+            os.chmod(swap, 0o644)  # copyfile does not carry the mode
+        except OSError:
+            pass
         os.replace(swap, target)
     except OSError:
         try:

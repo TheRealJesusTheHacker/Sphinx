@@ -39,6 +39,17 @@ def write_atomically(target: Path, data: bytes) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_name(target.name + ".tmp")
     temp.write_bytes(data)
+    # Explicit mode, never the writer's umask: this helper writes
+    # the guard's record + intent files (read back by unprivileged
+    # `sphinx status`) as well as /etc/resolv.conf, and a
+    # restrictive root umask would otherwise leave them unreadable
+    # to the very surfaces that report from them (Debian Phase 2
+    # audit). The contents are resolver configuration — already
+    # world-readable before Sphinx touches it — so 0644 is right.
+    try:
+        os.chmod(temp, 0o644)
+    except OSError:
+        pass
     try:
         os.replace(temp, target)
         return
@@ -47,6 +58,10 @@ def write_atomically(target: Path, data: bytes) -> None:
     swap = target.with_name(target.name + ".swap")
     try:
         shutil.copyfile(temp, swap)
+        try:
+            os.chmod(swap, 0o644)  # copyfile does not carry the mode
+        except OSError:
+            pass
         os.replace(swap, target)
     except OSError:
         try:
