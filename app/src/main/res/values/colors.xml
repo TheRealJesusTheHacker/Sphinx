@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sphinx's palette — the stone guardian's identity: basalt black,
+  sandstone, bronze-gold. These values are NOT chosen here. They are
+  the canonical constants from the Windows edition's theme module
+  (windows/src/sphinx_win/app/theme.py, Sphinx HEAD c9ea4f0dfc1d,
+  the Phase 3 "Sphinx palette HUD" release), carried verbatim: the
+  Android polish inherits the palette, it does not reinterpret it.
+  PaletteTest pins every value below against that set, and pins the
+  text pairings at WCAG 4.5:1 or better, like the sibling editions.
+
+  Red is the fleet-standard danger value and appears only where
+  something genuinely needs attention. No purple — that exception
+  belongs to Beerus alone.
+-->
+<resources>
+    <!-- Basalt black — window background -->
+    <color name="sphinx_bg">#0F0D0A</color>
+    <!-- Weathered stone — card/panel background -->
+    <color name="sphinx_panel">#171310</color>
+    <!-- Raised card / input / hover surface -->
+    <color name="sphinx_panel_raised">#211A12</color>
+    <!-- Carved edge — borders, separators (graphics only) -->
+    <color name="sphinx_hairline">#3A2F1E</color>
+    <!-- Sandstone — primary text -->
+    <color name="sphinx_text">#ECE0C6</color>
+    <!-- Worn sandstone — secondary text, hints -->
+    <color name="sphinx_text_faint">#B3A284</color>
+    <!-- Bronze-gold — the accent -->
+    <color name="sphinx_bronze">#CF9A3E</color>
+    <!-- Aged bronze — primary button fill, selection background -->
+    <color name="sphinx_bronze_deep">#6E521F</color>
+    <!-- Polished bronze — bright detail text (section titles) -->
+    <color name="sphinx_bronze_soft">#EAC987</color>
+    <!-- Dulled bronze — graphics only (resting-state marks) -->
+    <color name="sphinx_bronze_muted">#7D6740</color>
+    <!-- The fleet-standard danger red -->
+    <color name="sphinx_danger">#E5534B</color>
+    <!-- The icon's stone face -->
+    <color name="sphinx_icon_face">#16120D</color>
+</resources>

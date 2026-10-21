@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Theme.Sphinx — the canonical palette (see colors.xml for its
+  provenance) applied to the stock Material widgets this app uses.
+
+  The parent is the exact theme the app shipped with through
+  v0.4.0 — @android:style/Theme.Material.NoActionBar — so every
+  non-color default (widget shapes, spacing, state behavior) is
+  unchanged. Only colors are set here, each mapped to the same
+  role its constant plays in the Windows edition's stylesheet
+  (windows/src/sphinx_win/app/theme.py):
+
+    window / surfaces   BG, PANEL, PANEL_RAISED (raised = the
+                        Windows button fill, input and hover
+                        surface, and popup background)
+    text                TEXT primary, TEXT_FAINT secondary/hint
+    accent              BRONZE (switch on, input activation,
+                        selection handles, focus)
+    selection           BRONZE_DEEP background, TEXT on it
+    pressed highlight   PANEL_RAISED (the Windows hover surface)
+    dividers / edges    HAIRLINE
+    primary fill        BRONZE_DEEP (the Windows primary button)
+-->
+<resources>
+    <style name="Theme.Sphinx" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">@color/sphinx_bronze_deep</item>
+        <item name="android:colorPrimaryDark">@color/sphinx_bg</item>
+        <item name="android:colorAccent">@color/sphinx_bronze</item>
+        <item name="android:colorBackground">@color/sphinx_bg</item>
+        <item name="android:colorBackgroundFloating">@color/sphinx_panel_raised</item>
+        <item name="android:windowBackground">@color/sphinx_bg</item>
+        <item name="android:statusBarColor">@color/sphinx_bg</item>
+        <item name="android:navigationBarColor">@color/sphinx_bg</item>
+        <item name="android:textColorPrimary">@color/sphinx_text</item>
+        <item name="android:textColorSecondary">@color/sphinx_text_faint</item>
+        <item name="android:textColorTertiary">@color/sphinx_text_faint</item>
+        <item name="android:textColorHint">@color/sphinx_text_faint</item>
+        <item name="android:textColorHighlight">@color/sphinx_bronze_deep</item>
+        <item name="android:colorControlNormal">@color/sphinx_hairline</item>
+        <item name="android:colorControlActivated">@color/sphinx_bronze</item>
+        <item name="android:colorControlHighlight">@color/sphinx_panel_raised</item>
+        <item name="android:colorButtonNormal">@color/sphinx_panel_raised</item>
+        <item name="android:listDivider">@color/sphinx_hairline</item>
+    </style>
+</resources>

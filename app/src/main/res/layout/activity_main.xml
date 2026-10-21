@@ -2,6 +2,7 @@
 <ScrollView
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
+    android:background="@color/sphinx_bg"
     android:layout_height="match_parent">
 
     <LinearLayout
@@ -22,6 +23,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:text="@string/tagline"
+            android:textColor="@color/sphinx_bronze"
             android:textSize="16sp"
             android:textStyle="italic" />
 
@@ -75,6 +77,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="40dp"
             android:text="@string/section_lists"
+            android:textColor="@color/sphinx_bronze_soft"
             android:textSize="20sp"
             android:textStyle="bold" />
 
@@ -129,6 +132,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="40dp"
             android:text="@string/section_allowlist"
+            android:textColor="@color/sphinx_bronze_soft"
             android:textSize="20sp"
             android:textStyle="bold" />
 
@@ -184,6 +188,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="40dp"
             android:text="@string/section_custom"
+            android:textColor="@color/sphinx_bronze_soft"
             android:textSize="20sp"
             android:textStyle="bold" />
 
@@ -239,6 +244,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="40dp"
             android:text="@string/section_apps"
+            android:textColor="@color/sphinx_bronze_soft"
             android:textSize="20sp"
             android:textStyle="bold" />
 
@@ -277,6 +283,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="40dp"
             android:text="@string/section_profiles"
+            android:textColor="@color/sphinx_bronze_soft"
             android:textSize="20sp"
             android:textStyle="bold" />
 
@@ -336,6 +343,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="40dp"
             android:text="@string/section_boot"
+            android:textColor="@color/sphinx_bronze_soft"
             android:textSize="20sp"
             android:textStyle="bold" />
 
@@ -361,6 +369,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="40dp"
             android:text="@string/section_battery"
+            android:textColor="@color/sphinx_bronze_soft"
             android:textSize="20sp"
             android:textStyle="bold" />
 
@@ -392,6 +401,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="40dp"
             android:text="@string/section_log"
+            android:textColor="@color/sphinx_bronze_soft"
             android:textSize="20sp"
             android:textStyle="bold" />
 
