@@ -32,38 +32,77 @@ from . import validation as _validation
 BUNDLED_LIST_NAME = "bundled-blocklist.txt"
 
 
+def _fsync_file(path: Path) -> None:
+    """Flush one file's contents to stable storage."""
+    with open(path, "r+b") as f:
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _fsync_dir(path: Path) -> None:
+    """Flush a directory entry to stable storage, where the
+    platform allows opening a directory at all (Windows does not
+    hand out directory handles the same way — there the file fsync
+    above is the durability step, and this is a no-op)."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def write_atomically(target: Path, data: bytes) -> None:
     """Write ``data`` to ``target`` so the file is never left torn:
-    write a temp file, then rename it over the target. If the rename
-    ever refuses, stage the copy under a second name and rename
-    *that* — copying straight over the target is not an option,
-    because a crash mid-copy would leave half a file behind (and a
-    half-written list can still pass the sanity gate as a silently
-    weaker list). If even the staged rename fails, the old file stays
-    and the temps are cleaned up.
+    write a temp file, fsync it, then rename it over the target
+    (and fsync the containing directory after, where the platform
+    allows) — without the fsyncs the rename can reach the disk
+    before the data does, and the "atomic" write is not
+    power-loss-durable (Sweep #3, W-4). If the rename ever refuses,
+    stage the copy under a second name and rename *that* — copying
+    straight over the target is not an option, because a crash
+    mid-copy would leave half a file behind (and a half-written
+    list can still pass the sanity gate as a silently weaker
+    list). If even the staged rename fails, the old file stays,
+    the temps are cleaned up, and the failure is RAISED: a save
+    that never happened must never be reported as success.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_name(target.name + ".tmp")
-    temp.write_bytes(data)
+    with open(temp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
     try:
         os.replace(temp, target)
+        _fsync_dir(target.parent)
         return
     except OSError:
         pass
     swap = target.with_name(target.name + ".swap")
     try:
         shutil.copyfile(temp, swap)
+        _fsync_file(swap)
         os.replace(swap, target)
-    except OSError:
+    except OSError as e:
         try:
             swap.unlink(missing_ok=True)
         except OSError:
             pass
+        raise OSError(
+            f"Sphinx could not replace {target.name} — the previous "
+            "file was left unchanged."
+        ) from e
     finally:
         try:
             temp.unlink(missing_ok=True)
         except OSError:
             pass
+    _fsync_dir(target.parent)
 
 
 def _file_name_for(url: str) -> str:

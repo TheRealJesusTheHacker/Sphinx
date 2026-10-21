@@ -40,6 +40,64 @@ class TestAtomicWrite:
         assert target.read_bytes() == b"new-content"
         assert not (tmp_path / "f.txt.tmp").exists()
 
+    def test_temp_file_is_fsynced_before_replace(self, tmp_path, monkeypatch):
+        # W-4: without an fsync the "atomic" write is not
+        # power-loss-durable — the rename can reach disk before
+        # the data does.
+        import os
+
+        fsynced = []
+        real_fsync = os.fsync
+        monkeypatch.setattr(
+            os, "fsync", lambda fd: fsynced.append(fd) or real_fsync(fd)
+        )
+        target = tmp_path / "f.txt"
+        write_atomically(target, b"durable")
+        assert target.read_bytes() == b"durable"
+        assert fsynced  # the temp file (and directory, where allowed)
+
+    def test_first_replace_refusal_falls_back_to_the_swap(self, tmp_path, monkeypatch):
+        import os
+
+        target = tmp_path / "f.txt"
+        target.write_bytes(b"old")
+        real_replace = os.replace
+        calls = []
+
+        def flaky(src, dst):
+            calls.append((src, dst))
+            if len(calls) == 1:
+                raise OSError("injected first-replace refusal")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", flaky)
+        write_atomically(target, b"via-swap")
+        assert target.read_bytes() == b"via-swap"
+        assert len(calls) == 2  # direct rename, then the staged swap
+        assert not (tmp_path / "f.txt.tmp").exists()
+        assert not (tmp_path / "f.txt.swap").exists()
+
+    def test_final_replace_failure_raises_and_keeps_the_old_file(
+        self, tmp_path, monkeypatch
+    ):
+        # W-4: when even the staged rename fails, the write must
+        # say so — reporting a success that never happened leaves
+        # callers trusting state that is not on disk.
+        import os
+
+        target = tmp_path / "f.txt"
+        target.write_bytes(b"old")
+
+        def always_refuse(src, dst):
+            raise OSError("injected replace refusal")
+
+        monkeypatch.setattr(os, "replace", always_refuse)
+        with pytest.raises(OSError):
+            write_atomically(target, b"never-lands")
+        assert target.read_bytes() == b"old"  # the old file stays
+        assert not (tmp_path / "f.txt.tmp").exists()
+        assert not (tmp_path / "f.txt.swap").exists()
+
 
 class TestUpdater:
     def test_happy_path_both_sources(self, store):
