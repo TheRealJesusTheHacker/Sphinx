@@ -118,6 +118,11 @@ def test_maintainer_scripts_present_and_disciplined(built, tmp_path):
     # Removal restores first, and a failed restore stops the removal.
     assert "sphinx restore" in prerm
     assert "exit 1" in prerm
+    # The restore is gated on a saved record actually existing
+    # (audit finding 4): with no record there is nothing Sphinx owns
+    # to restore, and removal must not be trapped by an unrelated
+    # loopback resolver on the machine.
+    assert "dns-backup.json" in prerm
 
 
 def test_maintainer_scripts_are_shellcheck_clean():

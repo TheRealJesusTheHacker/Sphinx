@@ -10,7 +10,7 @@ set -e
 
 case "$1" in
     remove|upgrade)
-        if [ -x /usr/bin/sphinx ]; then
+        if [ -x /usr/bin/sphinx ] && [ -e /var/lib/sphinx/dns-backup.json ]; then
             if ! /usr/bin/sphinx restore; then
                 echo "sphinx: your DNS settings could not be verified as restored," >&2
                 echo "sphinx: so removing Sphinx has been stopped and nothing was removed." >&2
