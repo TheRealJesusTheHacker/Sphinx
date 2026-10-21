@@ -132,6 +132,70 @@ def free_port_pair():
         return s.getsockname()[1]
 
 
+class TestProofHygiene:
+    """Windows audit (Phase 1): the server's own liveness proof used
+    to be counted and logged as if a user app had asked it."""
+
+    def test_unrecorded_query_answers_without_counting(self):
+        engine, _ = make_engine()
+        response = engine.handle_query(
+            build_query("news.example.org"), record=False
+        )
+        assert response is not None
+        assert engine.allowed_count == 0
+        assert len(engine.query_log) == 0
+
+    def test_dispatch_consumes_the_proof_token_once(self):
+        engine, _ = make_engine()
+        server = DnsFilterServer(engine, port=free_port_pair())
+        server._proof = (0x1234, "example.com")
+        response = server._dispatch(build_query("example.com", qid=0x1234))
+        assert response is not None
+        assert engine.allowed_count == 0
+        assert len(engine.query_log) == 0
+        # The token is spent: the same query again is user traffic.
+        server._dispatch(build_query("example.com", qid=0x1234))
+        assert engine.allowed_count == 1
+
+
+class TestBoundedConcurrency:
+    """Windows audit (Phase 1): the threading servers spawned one
+    thread per datagram with no bound, so a flood of slow queries
+    grew the process without limit (the twin of the Android
+    edition's Phase 3 finding). In-flight work is capped now; this
+    flood needs no replies, so it runs even where the sandbox eats
+    them."""
+
+    def test_udp_flood_cannot_grow_threads_without_limit(self):
+        import time
+
+        def slow_forward(data):
+            time.sleep(2.0)
+            return build_response_for(data)
+
+        engine, _ = make_engine(forwarder=slow_forward)
+        port = free_port_pair()
+        server = DnsFilterServer(engine, port=port)
+        server.start()
+        try:
+            base = threading.active_count()
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect(("127.0.0.1", port))
+                query = build_query("news.example.org")
+                for _ in range(150):
+                    try:
+                        sock.send(query)
+                    except OSError:
+                        pass
+            time.sleep(0.8)
+            grew = threading.active_count() - base
+            from sphinx_win.core.server import MAX_IN_FLIGHT_QUERIES
+
+            assert grew <= MAX_IN_FLIGHT_QUERIES + 10
+        finally:
+            server.stop()
+
+
 class TestSocketRoundTrip:
     @requires_udp_replies
     def test_udp_round_trip_and_answers_on(self):
