@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.VpnService
@@ -31,7 +30,8 @@ import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
@@ -88,6 +88,8 @@ class SphinxVpnService : VpnService() {
         private const val UPSTREAM_TIMEOUT_MS = 3000
         private const val MAX_PACKET = 32767
         private const val OWNER_CACHE_CAP = 512
+        private const val OWNER_CACHE_TTL_NANOS = 60_000_000_000L // 60 s
+        private const val WORK_QUEUE_CAP = 512
 
         private val UPSTREAM_RESOLVERS = listOf("1.1.1.1", "9.9.9.9")
 
@@ -117,7 +119,27 @@ class SphinxVpnService : VpnService() {
     // pool: a stopped ExecutorService can never take tasks again, and
     // this instance can be re-started after onRevoke/ACTION_STOP paths
     // that did not destroy it.
-    private var workers: ExecutorService = Executors.newFixedThreadPool(4)
+    private var workers: ExecutorService = newWorkerPool()
+
+    /**
+     * The packet workers — a fixed pool behind a BOUNDED queue. The
+     * bound matters most in APP_BLOCK mode: every packet a blocked
+     * (by definition untrusted) app sends becomes queued work, and an
+     * unbounded queue would let a flooding app grow this service's
+     * memory until the system kills it — taking the filter down with
+     * it. When the queue is full, execute() refuses the packet: in
+     * app-block mode refused *is* dropped, which is the point of the
+     * mode; in filter mode the query goes unanswered and the asking
+     * app retries, exactly as it does on an upstream timeout. The
+     * counters count packets the workers actually processed, so under
+     * an extreme flood the drop counts understate the total stopped —
+     * bounded memory wins over exact bookkeeping in a flood.
+     */
+    private fun newWorkerPool(): ExecutorService = ThreadPoolExecutor(
+        4, 4, 0L, TimeUnit.MILLISECONDS,
+        LinkedBlockingQueue(WORK_QUEUE_CAP),
+        ThreadPoolExecutor.AbortPolicy(),
+    )
     private val writeLock = Any()
 
     @Volatile
@@ -169,8 +191,15 @@ class SphinxVpnService : VpnService() {
                 if (running) {
                     shutdown()
                     startFilter()
+                    return START_STICKY
                 }
-                return START_STICKY
+                // Not running: a restart changes nothing, so don't
+                // claim stickiness for it — a sticky-but-idle service
+                // would be resurrected by the system with a null
+                // intent, which the start path reads as "start the
+                // filter", turning protection on by itself after a
+                // crash while the user believes it is off.
+                return START_NOT_STICKY
             }
             else -> {
                 if (!running) {
@@ -203,7 +232,7 @@ class SphinxVpnService : VpnService() {
 
     private fun startFilter() {
         if (workers.isShutdown) {
-            workers = Executors.newFixedThreadPool(4)
+            workers = newWorkerPool()
         }
         startForegroundWithNotification()
         val rules = store.loadAppRules()
@@ -259,9 +288,12 @@ class SphinxVpnService : VpnService() {
                 for (pkg in rules.excludedPackages) {
                     try {
                         builder.addDisallowedApplication(pkg)
-                    } catch (e: PackageManager.NameNotFoundException) {
+                    } catch (e: Exception) {
                         // The app was uninstalled after the rule was
-                        // set; the rule simply matches nothing.
+                        // set (the documented NameNotFoundException),
+                        // or refused for any other reason: the rule
+                        // simply matches nothing. One bad rule must
+                        // never take the whole start path down.
                     }
                 }
             }
@@ -285,8 +317,13 @@ class SphinxVpnService : VpnService() {
                     try {
                         builder.addAllowedApplication(pkg)
                         added++
-                    } catch (e: PackageManager.NameNotFoundException) {
-                        // Uninstalled since the rule was set.
+                    } catch (e: Exception) {
+                        // Uninstalled since the rule was set (the
+                        // documented NameNotFoundException), or refused
+                        // for any other reason. If that leaves the
+                        // population empty, the caller falls back to
+                        // FILTER below — a bad rule degrades the mode,
+                        // it never crashes the start.
                     }
                 }
                 if (added == 0) return null
@@ -313,8 +350,10 @@ class SphinxVpnService : VpnService() {
                     else handlePacket(packet, output)
                 }
             } catch (e: Exception) {
-                // Pool shut down mid-stop: drop the packet; the loop
-                // condition ends the thread on the next pass.
+                // Pool shut down mid-stop, or the bounded queue is
+                // full under a flood: drop the packet (see
+                // newWorkerPool); the loop condition ends the thread
+                // on the next pass when shutting down.
             }
         }
     }
@@ -330,10 +369,19 @@ class SphinxVpnService : VpnService() {
         dropCounts.increment(attributeOwner(packet))
     }
 
-    // Flow-key → owning package ("" = looked up, unknown). Bounded by
-    // a blunt clear when it grows past the cap; attribution is a
+    // Flow-key → owning package ("" = looked up, unknown), stamped
+    // when cached. Entries expire: every blocked app shares the same
+    // tunnel source addresses, so a flow key is ports and destination
+    // — and ephemeral ports are reused once a connection closes. A
+    // permanent entry could pin a recycled flow to the app that held
+    // it earlier, which is a guess wearing a fact's clothes; past the
+    // TTL the platform is asked again, and an unanswered re-ask lands
+    // in the unattributed bucket where uncertainty belongs. Bounded
+    // by a blunt clear when it grows past the cap; attribution is a
     // display nicety, never worth unbounded memory.
-    private val ownerCache = ConcurrentHashMap<String, String>()
+    private class CachedOwner(val owner: String, val atNanos: Long)
+
+    private val ownerCache = ConcurrentHashMap<String, CachedOwner>()
 
     /**
      * Best-effort: which app sent this packet, via the platform's
@@ -351,7 +399,11 @@ class SphinxVpnService : VpnService() {
             append('|')
             append(flow.destAddress.toHex()).append(':').append(flow.destPort)
         }
-        ownerCache[key]?.let { return it.ifEmpty { null } }
+        ownerCache[key]?.let { cached ->
+            if (System.nanoTime() - cached.atNanos < OWNER_CACHE_TTL_NANOS) {
+                return cached.owner.ifEmpty { null }
+            }
+        }
         val owner = try {
             val manager = getSystemService(ConnectivityManager::class.java)
             val uid = manager.getConnectionOwnerUid(
@@ -368,7 +420,7 @@ class SphinxVpnService : VpnService() {
             null
         }
         if (ownerCache.size > OWNER_CACHE_CAP) ownerCache.clear()
-        ownerCache[key] = owner ?: ""
+        ownerCache[key] = CachedOwner(owner ?: "", System.nanoTime())
         return owner
     }
 
