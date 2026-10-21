@@ -8,6 +8,143 @@ never merely to make a report prettier).
 
 ---
 
+## Phase 3 audit — per-app rules and custom entries (2026-10-20)
+
+Scope: the two-capture-mode routing model (the phase's new
+packet-path surface, flagged for its own pass by the Phase 2 audit),
+mode transitions, drop attribution, custom block entries,
+permissions and privacy, doc honesty, and a regression pass over
+Phases 1–2.
+
+Method: full read of the Phase 3 commits against the audited
+8e0ee1f6 tree (local tree verified blob-identical to remote HEAD
+1e3e6f66 before starting); the 78-test JVM suite as baseline
+(reproduced green); 33 additional adversarial probes (hostile and
+truncated IpFlow packets plus a 20,000-case fuzz, AppRules conflict
+orderings both directions, DropCounts under 8-thread concurrency,
+custom-entry composition through the store's union path); the
+Android layer re-type-checked against android.jar.
+
+### Fixed
+
+1. **The packet workers' queue was unbounded.** The pool behind the
+   TUN reader was a fixed thread pool with an unbounded queue. In
+   filter mode the input is throttled by design (only DNS packets
+   to one address arrive), but app-block mode queues *every* packet
+   a blocked app sends — and a blocked app is by definition one the
+   user doesn't trust with the network. A flood (or a port scan,
+   where nearly every packet is an attribution cache miss costing a
+   platform lookup) grows the queue — each entry holding a packet
+   copy — faster than four workers drain it, until the system kills
+   the service and the filter with it. The pool now sits behind a
+   bounded queue (512) with refuse-on-full: in app-block mode a
+   refused packet is still dropped, never forwarded; in filter mode
+   the query goes unanswered and the asker retries, as on an
+   upstream timeout. The counters count packets actually processed,
+   so under an extreme flood the drop counts understate the total
+   stopped — bounded memory wins over exact bookkeeping in a flood.
+   *(SphinxVpnService)*
+
+2. **Attribution cache entries never expired.** The flow→app cache
+   keys on protocol, addresses, and ports; in app-block mode every
+   blocked app shares the same tunnel source addresses, so the key
+   is effectively ports + destination. Ephemeral ports are reused
+   after a connection closes, so a permanent entry could attribute
+   one blocked app's packets to another that held the same flow
+   earlier — a guess wearing a fact's clothes, against the spec's
+   "unattributed, never guessed at." Entries now expire after 60
+   seconds and the platform is asked again; an unanswered re-ask
+   lands in the unattributed bucket. *(SphinxVpnService)*
+
+3. **A restart that did nothing still claimed stickiness.**
+   ACTION_RESTART on a stopped filter returned START_STICKY. The
+   picker only sends it while the filter runs, but if the race ever
+   landed, the sticky-but-idle service would later be resurrected by
+   the system with a null intent — which the start path reads as
+   "start the filter," switching protection on by itself after a
+   crash while the user believes it is off. A restart that changes
+   nothing now returns START_NOT_STICKY. *(SphinxVpnService)*
+
+4. **A refused per-app rule could crash the start path.** Adding a
+   package to the interface caught only NameNotFoundException; any
+   other refusal from addAllowedApplication /
+   addDisallowedApplication would have propagated out of the start
+   path and crashed the service. Both loops now shrug off any
+   refusal per package: the rule matches nothing, and if that leaves
+   an app-block population empty, the existing fallback to filter
+   mode catches it — a bad rule degrades the mode, it never crashes
+   the start. *(SphinxVpnService)*
+
+### Documented and ignored
+
+- **AppRules' package shape is a hair stricter than the platform's
+  edge cases.** Rule names must be dot-separated labels starting
+  with a letter — the shape Android's build tools enforce for every
+  normally installed app. Legacy or hand-built packages with an
+  underscore-leading label segment (not producible through normal
+  install channels) would be refused a rule, silently. Widening the
+  shape is a product decision about which names are rules at all;
+  the practical exposure is nil. Ignored on purpose.
+- **The drop counters count processed drops.** Under a flood past
+  the bounded queue (fixed item 1), excess packets are discarded at
+  enqueue — dropped in every sense that matters, but not
+  individually counted. Stated here and in the code, rather than
+  pretending the number is exact under attack.
+
+### Verified clean
+
+- **Filter mode is the audited Phase 1/2 interface.** Diffed
+  against the Phase 2 builder: identical addresses, route, DNS
+  server, MTU, and session when no app is blocked; with exemptions,
+  the only change is addDisallowedApplication per exempted package.
+  handlePacket, the forwarding discipline, and the shutdown path
+  are untouched by Phase 3.
+- **App-block mode drops everything, for the named apps only.**
+  The population is exactly the successfully-added blocked
+  packages; default routes on both families draw all of a blocked
+  app's traffic in — DNS on any port, DoT (853), DoH (443), TCP and
+  UDP alike — and the reader's single code path drops every packet
+  it reads, unconditionally. No other app's traffic enters the
+  interface.
+- **The empty-population trap is closed.** When every blocked app
+  is uninstalled, buildInterface returns null and the service falls
+  back to filter mode; no default-route interface with an empty
+  allowlist can be established. A partially uninstalled set still
+  blocks the apps that remain.
+- **Attribution never guesses.** IpFlow returns ports 0 for
+  fragments past the first, extension-header chains, and non-port
+  protocols — all of which skip the owner lookup and land in the
+  unattributed bucket; platform lookup failures do the same.
+  20,000 fuzzed packets produced no exception.
+- **Custom entries enter through one door only.** Grepped every
+  construction and entry path: the UI validates with
+  normalizeEntry, the store saves through normalizeEntry and loads
+  through parseEntries, and the effective blocklist is a union of
+  parsed sets. The allowlist still wins over custom entries
+  (probed through FilterLists).
+- **QUERY_ALL_PACKAGES is used for the picker, only.** Package
+  enumeration exists nowhere else; the picker lists only apps that
+  request INTERNET, excludes Sphinx itself, and stores nothing but
+  the rules the user picked. Drop counters and the query log have
+  no disk or network path (the only persisted log state is its
+  on/off switch).
+- **The app-block trade is disclosed everywhere the crew claimed:**
+  README's honest-limits list ("It can't run the gate both ways at
+  once"), FILTER-SPEC's "Per-app rules," the ROADMAP Phase 3 entry,
+  and the in-app explainer on the main screen. Nothing presents
+  app-block mode as filtering-plus.
+- **Regression:** files outside the Phase 3 diff are byte-identical
+  to the audited Phase 2 tree; the full JVM suite passes (78/78),
+  including the sinkhole byte layout, upstream validation, and
+  update-atomicity tests. The service-layer fixes above are
+  verified by kotlinc type-check against android.jar plus code
+  re-read — the same ceiling prior audits worked to on this VM
+  (no instrumented Android runtime here).
+
+
+
+---
+
 ## Phase 2 audit — blocklist engine (2026-10-20)
 
 Scope: list parsing, remote updates and the atomic swap, the
