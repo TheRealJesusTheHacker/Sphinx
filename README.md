@@ -174,3 +174,8 @@ Requires JDK 17 and the Android SDK (platform 34, build-tools 34).
 
 Built by **Sentinel Safeguard LLC** — Kansas City, Missouri.
 Security for everyone.
+
+## License
+
+Sphinx is released under the [MIT License](LICENSE) — anyone can use
+it as they wish.
