@@ -63,7 +63,7 @@ def test_metadata(built):
     import sphinx_deb
 
     assert _field(built, "Package") == "sphinx"
-    assert _field(built, "Version") == sphinx_deb.__version__ == "0.1.0"
+    assert _field(built, "Version") == sphinx_deb.__version__ == "0.2.0"
     # Pure Python + data: architecture "all" is the honest answer.
     assert _field(built, "Architecture") == "all"
 
@@ -81,6 +81,12 @@ def test_payload_is_exactly_the_intended_set(built):
     payload = _payload_files(built)
     assert payload == expected
     assert not any("__pycache__" in p for p in payload)
+    # Phase 2's parity modules ship inside the package — the store,
+    # the updater, and the profile model the installed command and
+    # daemon import. (Implied by the exact-set check above; pinned
+    # by name because the phase's promise is that they are inside.)
+    for module in ("core/store.py", "core/updater.py", "core/profiles.py"):
+        assert f"./usr/lib/sphinx/sphinx_deb/{module}" in payload
 
 
 def test_payload_blocklist_is_the_canonical_asset_byte_for_byte(built, tmp_path):

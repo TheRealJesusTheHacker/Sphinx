@@ -312,6 +312,100 @@ def test_resolved_default_link_change_is_a_leftover_not_engaged(tmp_path):
     assert guard.detect_state() == DnsState.LEFTOVER
 
 
+# --- resumption: reboot and route change (Phase 2) -------------------------
+#
+# The resolved engagement is runtime state: a reboot drops it, and
+# a moved default route strands it. Intent (written only at
+# verified transitions) says protection was on; the record holds
+# the originals. Re-engaging runs the ordinary prove-then-point
+# path — against the record when its link still carries the route,
+# retargeted when it does not. Nothing is ever re-pointed silently:
+# these are the guard paths `sudo sphinx engage` takes when the
+# user (or status's guidance) asks for them.
+
+
+def test_resolved_reboot_reengage_uses_the_record_and_never_resaves(tmp_path):
+    view = stub_resolved_view()
+    guard = _guard(view, tmp_path)
+    assert guard.engage(FakeProofer()).ok
+    # Reboot: the runtime override is gone, the link is back to its
+    # DHCP servers — but the record and the intent survive.
+    view.links["eth0"] = ["192.168.1.1"]
+    assert guard.detect_state() == DnsState.LEFTOVER
+    assert guard.load_intent()["engaged"] is True
+    record_bytes = guard.backup_file.read_bytes()
+    result = guard.engage(FakeProofer())
+    assert result.ok
+    assert view.links["eth0"] == ["127.0.0.1", "::1"]
+    # The record on disk is the SAME record — never re-saved over.
+    assert guard.backup_file.read_bytes() == record_bytes
+    assert guard.disengage().ok
+    assert view.links["eth0"] == ["192.168.1.1"]
+
+
+def test_route_change_reengage_retargets_to_the_link_carrying_traffic(tmp_path):
+    view = stub_resolved_view(
+        links={"eth0": ["192.168.1.1"], "wlan0": ["10.0.0.1"]},
+        revert_to={"eth0": ["192.168.1.1"], "wlan0": ["10.0.0.1"]},
+    )
+    guard = _guard(view, tmp_path)
+    assert guard.engage(FakeProofer()).ok
+    view.link = "wlan0"  # Ethernet unplugged; Wi-Fi took over
+    assert guard.detect_state() == DnsState.LEFTOVER
+    result = guard.engage(FakeProofer())
+    assert result.ok
+    assert "wlan0" in result.message
+    # The stale override on the old link was undone, and the link
+    # actually carrying traffic is the one pointed now.
+    assert ("revert", "eth0") in view.calls
+    assert view.links["eth0"] == ["192.168.1.1"]
+    assert view.links["wlan0"] == ["127.0.0.1", "::1"]
+    record = guard.load_backup()
+    assert record is not None
+    assert record.link == "wlan0"
+    assert record.prior_servers == ["10.0.0.1"]  # the NEW link's own originals
+    assert guard.detect_state() == DnsState.ENGAGED
+    # And restore is exact for the retargeted engagement.
+    assert guard.disengage().ok
+    assert view.links["wlan0"] == ["10.0.0.1"]
+    assert not guard.backup_file.exists()
+
+
+def test_retarget_refuses_when_the_new_link_already_points_at_a_loopback(tmp_path):
+    view = stub_resolved_view(
+        links={"eth0": ["192.168.1.1"], "wlan0": ["127.0.0.1", "10.0.0.1"]},
+    )
+    guard = _guard(view, tmp_path)
+    assert guard.engage(FakeProofer()).ok
+    view.link = "wlan0"
+    result = guard.engage(FakeProofer())
+    assert not result.ok
+    assert "wlan0" in result.message
+    # Nothing was touched: the old override stands as it was, the
+    # new link was never pointed, the record still names eth0.
+    assert view.links["eth0"] == ["127.0.0.1", "::1"]
+    assert not any(call[0] == "set" and call[1] == "wlan0" for call in view.calls)
+    assert not any(call[0] == "revert" for call in view.calls)
+    record = guard.load_backup()
+    assert record is not None and record.link == "eth0"
+
+
+def test_retarget_refuses_when_the_old_override_cannot_be_undone(tmp_path):
+    view = stub_resolved_view(
+        links={"eth0": ["192.168.1.1"], "wlan0": ["10.0.0.1"]},
+        revert_to={"eth0": ["127.0.0.1", "::1"], "wlan0": ["10.0.0.1"]},
+    )
+    guard = _guard(view, tmp_path)
+    assert guard.engage(FakeProofer()).ok
+    view.link = "wlan0"
+    result = guard.engage(FakeProofer())
+    assert not result.ok
+    # The engagement was not moved and the record still names eth0.
+    assert not any(call[0] == "set" and call[1] == "wlan0" for call in view.calls)
+    record = guard.load_backup()
+    assert record is not None and record.link == "eth0"
+
+
 def test_restore_refuses_when_resolv_conf_became_a_symlink(tmp_path):
     # Audit finding 2: engaged as a plain file; if the file has
     # since become a symlink another stack owns, restore must not
