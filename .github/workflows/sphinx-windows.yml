@@ -50,7 +50,7 @@ jobs:
           python -m PyInstaller packaging/Sphinx.spec --noconfirm
           --distpath dist --workpath build/pyi
 
-      - name: Assemble the portable edition and checksums
+      - name: Assemble the portable edition
         shell: pwsh
         run: |
           $portable = Join-Path (Get-Location) 'dist\SphinxPortable'
@@ -58,8 +58,31 @@ jobs:
           Copy-Item 'dist\Sphinx.exe' $portable
           New-Item -ItemType File -Force (Join-Path $portable 'portable.txt') | Out-Null
           Compress-Archive -Path $portable -DestinationPath 'dist\SphinxPortable.zip' -Force
+
+      - name: Build the installer
+        # Inno Setup ships on the GitHub Windows images; install it
+        # if this image doesn't carry it. The .iss compiles the exe
+        # from the PyInstaller step into dist\SphinxSetup.exe; its
+        # uninstaller restores DNS (via Sphinx.exe --restore-dns)
+        # before removing anything.
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          } else {
+            $iscc = $iscc.Source
+          }
+          & $iscc 'packaging\Sphinx.iss'
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          if (-not (Test-Path 'dist\SphinxSetup.exe')) { throw "SphinxSetup.exe missing" }
+
+      - name: Write checksums
+        shell: pwsh
+        run: |
           $lines = @()
-          foreach ($f in @('dist\Sphinx.exe', 'dist\SphinxPortable.zip')) {
+          foreach ($f in @('dist\Sphinx.exe', 'dist\SphinxPortable.zip', 'dist\SphinxSetup.exe')) {
             $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
             $lines += "$hash  $(Split-Path $f -Leaf)"
           }
@@ -72,4 +95,5 @@ jobs:
           path: |
             windows/dist/Sphinx.exe
             windows/dist/SphinxPortable.zip
+            windows/dist/SphinxSetup.exe
             windows/dist/SHA256SUMS.txt
