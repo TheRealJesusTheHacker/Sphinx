@@ -1,0 +1,25 @@
+Package: sphinx
+Version: @VERSION@
+Architecture: all
+Maintainer: Sentinel Safeguard LLC <Sentinelsafeguard@outlook.com>
+Depends: python3 (>= 3.10), systemd
+Section: net
+Priority: optional
+Homepage: https://github.com/TheRealJesusTheHacker/Sphinx
+Description: Sphinx — system-wide ad and tracker blocker (Debian edition, Phase 1)
+ Every request gets questioned. Sphinx filters the DNS lookups this
+ machine makes: names on its blocklist are answered locally with a
+ sinkhole (0.0.0.0), and everything else is forwarded to the upstream
+ resolver unchanged. It sees names only — it never inspects, decrypts,
+ or modifies the contents of any connection.
+ .
+ Phase 1 is the working core: the filter daemon (a systemd service),
+ the bundled blocklist, and the engage/restore commands that point
+ this machine's DNS at the filter and put it back exactly.
+ Installing this package never changes your DNS by itself: the
+ service is not started or enabled by the install, and turning
+ Sphinx on is a separate, explicit step (sudo sphinx engage).
+ There is no graphical interface yet, and profiles and list updates
+ are later phases. Ads served from the same domain as the content
+ itself (YouTube, for example) cannot be blocked by any DNS filter;
+ Sphinx does not claim otherwise.

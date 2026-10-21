@@ -1,0 +1,31 @@
+#!/bin/sh
+# Sphinx postinst — install-time setup ONLY.
+#
+# Installing this package never changes the machine's DNS, and never
+# starts or enables the service. The service stays off until the
+# user enables it; turning filtering on is a separate, explicit
+# step (sudo sphinx engage) under the engage/restore discipline.
+set -e
+
+case "$1" in
+    configure)
+        if ! getent passwd sphinx >/dev/null; then
+            useradd --system --home-dir /var/lib/sphinx \
+                --shell /usr/sbin/nologin sphinx
+        fi
+        mkdir -p /var/lib/sphinx
+        chown sphinx:sphinx /var/lib/sphinx
+        chmod 0755 /var/lib/sphinx
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+        fi
+        echo "Sphinx is installed. The service is NOT running yet, and"
+        echo "your DNS settings were not changed. To use Sphinx:"
+        echo "  1. Start the filter:   sudo systemctl enable --now sphinx"
+        echo "  2. Turn it on:         sudo sphinx engage"
+        echo "  3. Check it any time:  sphinx status"
+        echo "Turn it off and put your DNS back exactly:  sudo sphinx restore"
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,6 @@
+#!/bin/sh
+# The sphinx command: runs the Debian edition's Python package from
+# its installed home under /usr/lib/sphinx.
+PYTHONPATH=/usr/lib/sphinx
+export PYTHONPATH
+exec python3 -m sphinx_deb "$@"

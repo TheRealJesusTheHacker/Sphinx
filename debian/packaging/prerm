@@ -1,0 +1,36 @@
+#!/bin/sh
+# Sphinx prerm — removal (and upgrade) starts with the restore.
+#
+# Before any file is removed, the machine's DNS settings are put
+# back exactly as they were before Sphinx was turned on, and the
+# restore is verified. If it cannot be verified, removal STOPS —
+# the machine is never left pointing at a filter that is being
+# removed. (The Windows edition's installer keeps the same rule.)
+set -e
+
+case "$1" in
+    remove|upgrade)
+        if [ -x /usr/bin/sphinx ]; then
+            if ! /usr/bin/sphinx restore; then
+                echo "sphinx: your DNS settings could not be verified as restored," >&2
+                echo "sphinx: so removing Sphinx has been stopped and nothing was removed." >&2
+                echo "sphinx: run 'sphinx status' to see the state, fix the problem it" >&2
+                echo "sphinx: names, then remove the package again." >&2
+                exit 1
+            fi
+        elif [ -e /var/lib/sphinx/dns-backup.json ]; then
+            echo "sphinx: a saved DNS record exists, but the sphinx command is" >&2
+            echo "sphinx: missing, so the restore cannot be verified. Removal has" >&2
+            echo "sphinx: been stopped and nothing was removed." >&2
+            exit 1
+        fi
+        if [ -d /run/systemd/system ]; then
+            systemctl stop sphinx.service || true
+            if [ "$1" = "remove" ]; then
+                systemctl disable sphinx.service || true
+            fi
+        fi
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,25 @@
+#!/bin/sh
+# Sphinx postrm.
+#
+# The documented choice for user data: a plain remove leaves
+# /var/lib/sphinx in place — it holds the saved DNS record and the
+# recorded on/off decision, so a reinstall picks up exactly where it
+# left off. A purge removes that state and the service user too.
+# (The /etc/sphinx/sphinx.conf settings file is a conffile; dpkg
+# handles it, including its removal on purge.)
+set -e
+
+case "$1" in
+    purge)
+        rm -rf /var/lib/sphinx
+        if getent passwd sphinx >/dev/null; then
+            userdel sphinx || true
+        fi
+        ;;
+esac
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+
+exit 0
