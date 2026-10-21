@@ -14,6 +14,13 @@
       other apps' packages from an app unless it holds this.)
     -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!--
+      For the Phase 4 opt-in "start on boot" setting: lets Android
+      tell Sphinx the phone finished booting. Nothing is received
+      but that one system broadcast, and the filter restarts only
+      if the user opted in AND left the filter on (BootReceiver).
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="false"
@@ -56,6 +63,21 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Local DNS ad and tracker filtering" />
         </service>
+
+        <!--
+          Phase 4 boot auto-start (opt-in). BOOT_COMPLETED is a
+          protected broadcast — only the Android system can send
+          it — so exported=true here admits the system, not other
+          apps. The receiver itself starts nothing unless the user
+          opted in, left the filter on, and VPN consent is in place.
+        -->
+        <receiver
+            android:name=".boot.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 
