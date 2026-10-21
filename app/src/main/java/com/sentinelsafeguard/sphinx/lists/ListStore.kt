@@ -2,6 +2,7 @@ package com.sentinelsafeguard.sphinx.lists
 
 import android.content.Context
 import com.sentinelsafeguard.sphinx.core.Allowlist
+import com.sentinelsafeguard.sphinx.core.AppRules
 import com.sentinelsafeguard.sphinx.core.Blocklist
 import com.sentinelsafeguard.sphinx.core.FilterLists
 import com.sentinelsafeguard.sphinx.core.ListSource
@@ -26,6 +27,8 @@ class ListStore(context: Context) {
     private val appContext = context.applicationContext
     private val listsDir = File(appContext.filesDir, "lists").apply { mkdirs() }
     private val allowlistFile = File(appContext.filesDir, "allowlist.txt")
+    private val customBlockFile = File(appContext.filesDir, "custom-block.txt")
+    private val appRulesFile = File(appContext.filesDir, "app-rules.txt")
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     // --- Sources --------------------------------------------------------
@@ -127,9 +130,14 @@ class ListStore(context: Context) {
         return if (ListValidation.isAcceptable(blocklist)) blocklist else null
     }
 
-    /** The lists the filter should run with right now. */
+    /** The lists the filter should run with right now: the active
+     *  blocklist (downloaded, or bundled) with the user's own custom
+     *  block entries unioned in; the allowlist still wins over both. */
     fun loadEffectiveLists(): FilterLists {
-        val blocklist = loadDownloadedBlocklist() ?: loadBundledBlocklist()
+        val base = loadDownloadedBlocklist() ?: loadBundledBlocklist()
+        val custom = customBlockDomainSet()
+        val blocklist =
+            if (custom.isEmpty()) base else Blocklist(base.domains + custom)
         return FilterLists(blocklist, loadAllowlist())
     }
 
@@ -171,6 +179,46 @@ class ListStore(context: Context) {
         val normalized = entries.mapNotNull { Blocklist.normalizeEntry(it) }.toSortedSet()
         val text = normalized.joinToString("\n", postfix = "\n")
         writeAtomically(allowlistFile, text.toByteArray(Charsets.UTF_8))
+    }
+
+    // --- Custom block entries (Phase 3) -------------------------------------
+
+    /**
+     * The user's own blocked domains, as a parsed entry set. Entries
+     * enter ONLY through the parser's front door
+     * ([Blocklist.parseEntries] / [Blocklist.normalizeEntry] — the
+     * Phase 2 audit rule), so what is stored is exactly what the
+     * matcher honors: nothing an entry-time check would refuse can be
+     * sitting in the file pretending to work.
+     */
+    private fun customBlockDomainSet(): Set<String> {
+        if (!customBlockFile.isFile) return emptySet()
+        return customBlockFile.bufferedReader().useLines { lines ->
+            Blocklist.parseEntries(lines)
+        }
+    }
+
+    /** The user's custom block entries, normalized and sorted. */
+    fun customBlockEntries(): List<String> = customBlockDomainSet().sorted()
+
+    fun saveCustomBlockEntries(entries: Collection<String>) {
+        val normalized = entries.mapNotNull { Blocklist.normalizeEntry(it) }.toSortedSet()
+        val text = normalized.joinToString("\n", postfix = "\n")
+        writeAtomically(customBlockFile, text.toByteArray(Charsets.UTF_8))
+    }
+
+    // --- App rules (Phase 3) --------------------------------------------------
+
+    /** The user's per-app rules (blocked outright / exempt), or an
+     *  empty rule set when none were ever saved. */
+    fun loadAppRules(): AppRules {
+        if (!appRulesFile.isFile) return AppRules()
+        return appRulesFile.bufferedReader().useLines { lines -> AppRules.parse(lines) }
+    }
+
+    fun saveAppRules(rules: AppRules) {
+        val text = rules.serializeLines().joinToString("\n", postfix = "\n")
+        writeAtomically(appRulesFile, text.toByteArray(Charsets.UTF_8))
     }
 
     // --- Query log setting --------------------------------------------------
