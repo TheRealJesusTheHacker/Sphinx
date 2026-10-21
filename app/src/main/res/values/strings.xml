@@ -62,6 +62,36 @@
     <string name="picker_rule_blocked_short">BLOCKED</string>
     <string name="picker_rule_excluded_short">NOT FILTERED</string>
 
+    <!-- Notification permission, profiles, boot, battery (Phase 4) -->
+    <string name="notification_denied">Notifications are off for Sphinx, so its status won\'t appear in your notification shade. The filter still works — this only affects the status display. To allow it later: Settings → Apps → Sphinx → Notifications.</string>
+
+    <string name="section_profiles">Profiles</string>
+    <string name="profiles_explainer">A profile saves your app rules, your allowlist, and your own block entries under one name — Home, Kids, Strict, whatever you call them. The block lists themselves are shared by every profile. While a profile is active, editing those rules edits the profile too — what a profile says is always what it does.</string>
+    <string name="profiles_active">Active profile: %1$s</string>
+    <string name="profiles_none_active">No profile is active — you\'re editing the live rules directly.</string>
+    <string name="profiles_empty">No profiles yet. Set your rules the way you like them, then save them as a profile.</string>
+    <string name="button_profile_switch">Use selected profile</string>
+    <string name="button_profile_delete">Delete selected</string>
+    <string name="button_profile_new">Save current rules as a new profile…</string>
+    <string name="profile_name_title">New profile</string>
+    <string name="profile_name_message">Name this profile. Your current rules are saved under it, and it becomes the active profile.</string>
+    <string name="profile_name_hint">Profile name</string>
+    <string name="profile_created">Profile saved — it\'s now the active profile.</string>
+    <string name="profile_bad_name">That name can\'t be used — it may be taken already, empty, or too long.</string>
+    <string name="profile_switched">Profile switched — the filter now runs those rules.</string>
+    <string name="profile_deleted">Profile deleted. Your current rules are unchanged.</string>
+
+    <string name="section_boot">Start on boot</string>
+    <string name="boot_explainer">If this is on, and Sphinx was running when the phone shut down, Sphinx starts itself after the phone restarts — in the same mode, with the same rules. If you had turned Sphinx off, it stays off. This setting itself is off until you turn it on.</string>
+    <string name="boot_toggle">Start Sphinx when the phone turns on</string>
+
+    <string name="section_battery">Battery</string>
+    <string name="battery_explainer">Android\'s battery saver can put apps to sleep — and a sleeping filter filters nothing. If Sphinx ever stops unexpectedly, exempting it here is the usual fix. The choice is yours, in Android\'s own settings; Sphinx never changes it for you. And if the filter does stop, this app shows it as off — it never pretends to be protecting you when it isn\'t.</string>
+    <string name="battery_exempt">Sphinx is exempt from battery optimization — Android won\'t put it to sleep in the background.</string>
+    <string name="battery_not_exempt">Sphinx is not exempt from battery optimization — aggressive battery modes can stop the filter.</string>
+    <string name="button_battery_settings">Open battery settings…</string>
+    <string name="battery_settings_failed">Couldn\'t open Android\'s battery settings from here.</string>
+
     <!-- Query log (Phase 2) -->
     <string name="section_log">Query log</string>
     <string name="log_explainer">The most recent lookups Sphinx questioned — kept only in memory on this phone, never sent anywhere, and gone when the app\'s process stops. Recording is on by default so you can see Sphinx working; turn it off any time.</string>

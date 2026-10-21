@@ -1,13 +1,22 @@
 package com.sentinelsafeguard.sphinx
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
+import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.Spinner
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
@@ -26,10 +35,11 @@ import java.util.Locale
 /**
  * Sphinx's UI: the Phase 1 toggle and counters, Phase 2's list
  * controls — list status and updates, the list-source editor, the
- * allowlist, and the on-device query log — and Phase 3's custom block
+ * allowlist, and the on-device query log — Phase 3's custom block
  * entries and app rules (the summary here; the picker itself is
- * [AppPickerActivity]). Plain Android views, no UI toolkit
- * dependencies; visual polish is Phase 4.
+ * [AppPickerActivity]), and Phase 4's profiles, start-on-boot
+ * switch, battery section, and the notification-permission flow.
+ * Plain Android views, no UI toolkit dependencies.
  *
  * Heavy work (parsing lists, downloading updates) always runs on a
  * background thread; this activity only renders results.
@@ -60,6 +70,19 @@ class MainActivity : Activity() {
     private lateinit var rulesSummaryText: TextView
     private lateinit var dropsText: TextView
     private lateinit var chooseAppsButton: Button
+
+    private lateinit var notificationHintText: TextView
+
+    private lateinit var profilesStatusText: TextView
+    private lateinit var profilesSpinner: Spinner
+    private lateinit var profileSwitchButton: Button
+    private lateinit var profileDeleteButton: Button
+    private lateinit var profileNewButton: Button
+
+    private lateinit var bootToggle: Switch
+
+    private lateinit var batteryStatusText: TextView
+    private lateinit var batteryButton: Button
 
     private lateinit var logToggle: Switch
     private lateinit var logItemsText: TextView
@@ -119,6 +142,27 @@ class MainActivity : Activity() {
             startActivity(Intent(this, AppPickerActivity::class.java))
         }
 
+        notificationHintText = findViewById(R.id.notificationHintText)
+
+        profilesStatusText = findViewById(R.id.profilesStatusText)
+        profilesSpinner = findViewById(R.id.profilesSpinner)
+        profileSwitchButton = findViewById(R.id.profileSwitchButton)
+        profileSwitchButton.setOnClickListener { onSwitchProfile() }
+        profileDeleteButton = findViewById(R.id.profileDeleteButton)
+        profileDeleteButton.setOnClickListener { onDeleteProfile() }
+        profileNewButton = findViewById(R.id.profileNewButton)
+        profileNewButton.setOnClickListener { onNewProfile() }
+
+        bootToggle = findViewById(R.id.bootToggle)
+        bootToggle.isChecked = store.bootAutoStartEnabled()
+        bootToggle.setOnCheckedChangeListener { _, checked ->
+            store.setBootAutoStartEnabled(checked)
+        }
+
+        batteryStatusText = findViewById(R.id.batteryStatusText)
+        batteryButton = findViewById(R.id.batteryButton)
+        batteryButton.setOnClickListener { openBatterySettings() }
+
         logToggle = findViewById(R.id.logToggle)
         logToggle.isChecked = store.queryLogEnabled()
         logToggle.setOnCheckedChangeListener { _, checked ->
@@ -137,13 +181,21 @@ class MainActivity : Activity() {
         refreshAllowlistView()
         refreshCustomView()
         refreshRulesView()
+        refreshProfilesView()
+        refreshBatteryView()
+        refreshNotificationHint()
         refreshListStatus()
     }
 
     override fun onResume() {
         super.onResume()
-        // The app picker may have changed the rules while we were gone.
+        // The app picker may have changed the rules while we were gone;
+        // the user may also have changed notification or battery
+        // settings. Re-read all of it.
         refreshRulesView()
+        refreshProfilesView()
+        refreshBatteryView()
+        refreshNotificationHint()
         handler.post(refresh)
     }
 
@@ -184,7 +236,54 @@ class MainActivity : Activity() {
         startService(
             Intent(this, SphinxVpnService::class.java).setAction(SphinxVpnService.ACTION_START)
         )
+        maybeAskNotificationPermission()
         refreshUi()
+    }
+
+    // --- Notification permission (Phase 4) ------------------------------
+
+    /**
+     * The status notification needs the user's say-so on Android 13+.
+     * The ask is tied to the moment it becomes relevant — the user
+     * has just turned the filter on — and it happens at most once:
+     * the asked-marker is set before the prompt shows, so a refusal
+     * (or a dismissal) is the user's answer, recorded, and the app
+     * explains the consequence in place (refreshNotificationHint)
+     * instead of ever asking again.
+     */
+    private fun maybeAskNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        if (store.notificationAsked()) return
+        store.setNotificationAsked()
+        requestPermissions(
+            arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+            REQUEST_NOTIFICATIONS,
+        )
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_NOTIFICATIONS) refreshNotificationHint()
+    }
+
+    /** When the user has declined, say plainly what that means and
+     *  where to change it — a standing note, not a repeated prompt. */
+    private fun refreshNotificationHint() {
+        val denied = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            store.notificationAsked() &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        notificationHintText.visibility = if (denied) View.VISIBLE else View.GONE
+        if (denied) notificationHintText.text = getString(R.string.notification_denied)
     }
 
     // --- List updates (Phase 2) ----------------------------------------
@@ -344,6 +443,111 @@ class MainActivity : Activity() {
         dropsText.text = lines.joinToString("\n")
     }
 
+    // --- Profiles (Phase 4) ------------------------------------------------
+
+    private fun refreshProfilesView() {
+        val set = store.loadProfileSet()
+        profilesStatusText.text = when {
+            set.profiles.isEmpty() -> getString(R.string.profiles_empty)
+            set.activeName != null -> getString(R.string.profiles_active, set.activeName)
+            else -> getString(R.string.profiles_none_active)
+        }
+        val names = set.profiles.map { it.name }
+        val adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_item, names,
+        )
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        profilesSpinner.adapter = adapter
+        val activeIndex = names.indexOf(set.activeName)
+        if (activeIndex >= 0) profilesSpinner.setSelection(activeIndex)
+        val hasProfiles = names.isNotEmpty()
+        profilesSpinner.isEnabled = hasProfiles
+        profileSwitchButton.isEnabled = hasProfiles
+        profileDeleteButton.isEnabled = hasProfiles
+    }
+
+    private fun selectedProfileName(): String? = profilesSpinner.selectedItem?.toString()
+
+    private fun onSwitchProfile() {
+        val name = selectedProfileName() ?: return
+        if (!store.switchProfile(name)) {
+            refreshProfilesView()
+            return
+        }
+        toast(getString(R.string.profile_switched))
+        // Apply through the audited restart path — the same shutdown/
+        // start lifecycle a stop and start would have produced — so
+        // the running filter picks up the profile's rules and mode.
+        if (SphinxVpnService.isRunning) {
+            startService(
+                Intent(this, SphinxVpnService::class.java)
+                    .setAction(SphinxVpnService.ACTION_RESTART)
+            )
+        }
+        refreshAllowlistView()
+        refreshCustomView()
+        refreshRulesView()
+        refreshProfilesView()
+    }
+
+    private fun onDeleteProfile() {
+        val name = selectedProfileName() ?: return
+        if (store.deleteProfile(name)) {
+            toast(getString(R.string.profile_deleted))
+        }
+        refreshProfilesView()
+    }
+
+    private fun onNewProfile() {
+        val input = EditText(this)
+        input.hint = getString(R.string.profile_name_hint)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.profile_name_title)
+            .setMessage(R.string.profile_name_message)
+            .setView(input)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                if (store.createProfile(input.text.toString()) == null) {
+                    toast(getString(R.string.profile_bad_name))
+                } else {
+                    toast(getString(R.string.profile_created))
+                    refreshProfilesView()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    // --- Battery (Phase 4) ---------------------------------------------------
+
+    private fun refreshBatteryView() {
+        val manager = getSystemService(PowerManager::class.java)
+        val exempt = manager.isIgnoringBatteryOptimizations(packageName)
+        batteryStatusText.text = getString(
+            if (exempt) R.string.battery_exempt else R.string.battery_not_exempt
+        )
+        batteryButton.visibility = if (exempt) View.GONE else View.VISIBLE
+    }
+
+    /**
+     * Offer Android's own per-app battery dialog — the user decides,
+     * in the system's UI. If a build of Android won't show that
+     * dialog, fall back to the battery-optimization settings list.
+     * Sphinx itself never changes the setting.
+     */
+    private fun openBatterySettings() {
+        val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+            .setData(Uri.parse("package:$packageName"))
+        try {
+            startActivity(direct)
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (e2: Exception) {
+                toast(getString(R.string.battery_settings_failed))
+            }
+        }
+    }
+
     // --- Rendering ---------------------------------------------------------
 
     private fun refreshUi() {
@@ -420,6 +624,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_VPN_CONSENT = 1001
+        private const val REQUEST_NOTIFICATIONS = 1002
         private const val REFRESH_MS = 500L
         private const val LOG_LINES_SHOWN = 30
     }
