@@ -74,8 +74,10 @@ class SphinxVpnService : VpnService() {
         const val ACTION_STOP = "com.sentinelsafeguard.sphinx.action.STOP"
         const val ACTION_RELOAD_LISTS = "com.sentinelsafeguard.sphinx.action.RELOAD_LISTS"
 
-        /** Tear the interface down and rebuild it with the app rules
-         *  now on disk — how a rule change takes effect on a running
+        /** Tear the interface down and rebuild it with the rule
+         *  state now on disk — app rules for the new interface, and
+         *  the lists (allowlist, custom entries) reloaded into
+         *  memory — how a rule change takes effect on a running
          *  filter, through the same shutdown/start lifecycle as a
          *  stop followed by a start. */
         const val ACTION_RESTART = "com.sentinelsafeguard.sphinx.action.RESTART"
@@ -184,13 +186,22 @@ class SphinxVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             ACTION_RESTART -> {
-                // An app-rule change on a running filter: rebuild the
+                // A rule change on a running filter: rebuild the
                 // interface through the ordinary shutdown/start path,
                 // so the new rules run on exactly the lifecycle a stop
-                // and start would have produced — no third state.
+                // and start would have produced — no third state. The
+                // lists are reloaded too, not just the interface: a
+                // profile switch (Phase 4) changes the allowlist and
+                // custom entries, which live only in the in-memory
+                // lists — rebuilding the interface alone would leave
+                // the running filter questioning with the *previous*
+                // profile's lists until some unrelated reload (Phase 4
+                // audit finding). A stop and start would have loaded
+                // them fresh; so does a restart, now.
                 if (running) {
                     shutdown()
                     startFilter()
+                    Thread({ reloadListsNow() }, "sphinx-list-reloader").start()
                     return START_STICKY
                 }
                 // Not running: a restart changes nothing, so don't
@@ -203,6 +214,17 @@ class SphinxVpnService : VpnService() {
             }
             else -> {
                 if (!running) {
+                    // Go foreground BEFORE waiting for the lists.
+                    // When the boot receiver (Phase 4) starts this
+                    // service with startForegroundService, Android
+                    // gives the service only a few seconds to call
+                    // startForeground or it kills the app — and at
+                    // boot, under load from everything else starting,
+                    // the first list parse can take longer than that
+                    // (Phase 4 audit finding). The notification goes
+                    // up now; startFilter posts it again (same ID —
+                    // a no-op update) once the interface is up.
+                    startForegroundWithNotification()
                     // Don't run unfiltered while the lists load: wait
                     // for the first load (bounded — parsing is fast,
                     // and the bundled asset cannot be missing).

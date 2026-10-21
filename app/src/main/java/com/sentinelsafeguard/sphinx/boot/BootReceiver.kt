@@ -41,6 +41,14 @@ class BootReceiver : BroadcastReceiver() {
         if (VpnService.prepare(context) != null) return
         val start = Intent(context, SphinxVpnService::class.java)
             .setAction(SphinxVpnService.ACTION_START)
-        context.startForegroundService(start)
+        try {
+            context.startForegroundService(start)
+        } catch (e: Exception) {
+            // Boot failing must be silent, never a crash dialog at
+            // the phone's most visible moment: if the system refuses
+            // the start for any reason, Sphinx simply stays off and
+            // the user can start it from the app, as if the setting
+            // weren't there.
+        }
     }
 }
