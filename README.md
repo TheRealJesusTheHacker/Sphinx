@@ -121,16 +121,21 @@ resolver and the answer comes right back.
 Sphinx is one product with multiple editions in this repo, all built on
 the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md)):
 
-1. **Android** — the app described above (local VPN mode). *In build now.*
-2. **Windows (SPHINX.EXE)** — a local DNS-filter service the system DNS
-   points at, with installer and portable editions like the rest of the
-   Sentinel fleet. *Planned — not started.*
+1. **Android** — the app described above (local VPN mode).
+   *Feature-complete; release gate pending.*
+2. **Windows (SPHINX.EXE)** — a local DNS filter listening on loopback
+   (127.0.0.1 and ::1) that the system DNS is pointed at while it
+   runs, under a save-first / restore-exactly discipline for the
+   machine's original DNS settings. One-file exe plus a portable
+   edition; an installer follows. *In build — Phase 1 (core filter
+   service) has landed; see [windows/README.md](windows/README.md).*
 3. **Debian/Linux** — a local DNS-filter daemon (systemd service),
    shipped as a .deb. *Planned — not started.*
 4. Further platforms as feasible after those three.
 
-Only the Android edition exists today. The others are named here so the
-plan is public and honest — not because they're ready.
+The Android and Windows editions exist today; the Windows edition is
+a Phase 1 build, not a release. The others are named here so the plan
+is public and honest — not because they're ready.
 
 ## Status
 

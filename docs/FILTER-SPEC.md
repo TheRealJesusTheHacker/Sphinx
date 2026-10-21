@@ -258,6 +258,33 @@ desired one, and staying on follows these rules:
   platform's own settings path so the user decides. It never
   forces or changes the setting itself.
 
+## Windows edition notes
+
+The Windows edition engages by configuration, not by tunnel:
+
+- It listens on loopback — 127.0.0.1 and ::1, UDP and TCP, port 53 —
+  and, while it is on, the DNS settings of the adapters carrying a
+  default route point at it. Both families are engaged: Windows
+  consults IPv6 DNS servers in parallel with IPv4 ones, so engaging
+  IPv4 alone would leave queries unquestioned.
+- The machine's original settings are a restore point, under the
+  fleet's restore discipline: saved **before** any change, the save
+  verified by reading it back, an existing record never overwritten
+  (a loopback address is never recorded as an original), every
+  change verified by reading the adapter back, and turning the
+  filter off restores exactly what was recorded — including
+  "automatic (DHCP)" — before the record is retired. A saved record
+  found with DNS no longer pointing at the filter is its own state
+  (a leftover), offered for restore or dismissal, never silently
+  treated as on; loopback DNS with no record is never taken over,
+  because settings Sphinx didn't save it cannot honestly restore.
+- Administrator rights gate the *changes* only: the app opens,
+  reports the real state, and explains the requirement without
+  them, changing nothing.
+- The filter must prove it answers on a loopback before DNS is
+  pointed at it; a machine is never aimed at a resolver that isn't
+  answering.
+
 ## Honesty rules baked into the design
 
 - Ads served from the same domain as requested content (YouTube /

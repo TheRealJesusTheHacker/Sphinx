@@ -186,6 +186,65 @@ Starts after the Android core lands.
 - Two forms, like the rest of the fleet: an installer edition and a
   portable no-install edition.
 
+### Windows Phase 1 — Core filter service (landed)
+
+- **The brain, in Python** (`windows/src/sphinx_win/core/`): a direct
+  port of the Android core — list parsing with the spec's safety
+  rails, suffix matching with allowlist-wins (rule 5), the sanity
+  gate, HTTPS-only redirect-vetted downloads, atomic list storage
+  and updates (a failed update changes nothing, including the
+  recorded time — the Android Phase 2 audit fix, present here from
+  the start), custom entries through the parser's front door only,
+  and the memory-only 500-entry query log. The bundled list is the
+  identical StevenBlack file and parses to the identical **71,491**
+  domains under the same parser rules.
+- **The filter server:** UDP + TCP listeners on 127.0.0.1 **and**
+  ::1 (Windows consults IPv6 DNS servers in parallel; IPv4-only
+  would leave a bypass lane). Blocked → the spec's sinkhole;
+  allowed → forwarded unchanged under the audited validation
+  discipline (connected socket, ID + QR match, one overall 3 s
+  deadline per resolver, fallback tried once), with truncated
+  answers completed over TCP.
+- **System DNS engagement, restore-first:** administrator rights
+  gate any change (without them the app says so and touches
+  nothing); the active adapters' original settings are saved to
+  `dns-backup.json` and **verified by read-back before anything
+  changes**; a backup on disk is never overwritten (a loopback can
+  never be recorded as an original); every change is verified;
+  stop restores exactly — DHCP included — and only a verified
+  restore retires the backup; a backup found with DNS no longer
+  engaged is a distinct *leftover* state with Restore / Dismiss,
+  and loopback DNS with no backup is never taken over. Before DNS
+  moves, the filter must prove it answers on each loopback it
+  bound. FILTER-SPEC gained a "Windows edition notes" section
+  recording this engagement model.
+- **UI:** one plain PySide6 window — real-state status, on/off,
+  counters, list status, manual update, source editor, allowlist
+  and custom-entry editors (entry rails enforced where typed), the
+  in-memory query log, the leftover banner. Closing the window
+  stops cleanly (DNS restored first; a failed restore refuses the
+  close). Phase 1 runs as this app — a background Windows service
+  and tray host are later work, stated in windows/README.md.
+- **Packaging + CI:** a PyInstaller spec for the one-file
+  `Sphinx.exe`, a portable-zip build script (portable.txt marker →
+  data beside the exe) with SHA256SUMS, and a GitHub Actions
+  workflow on windows-latest that runs the suite and builds both
+  artifacts — the edition's build gate, since the dev VM (Linux)
+  cannot produce a Windows binary.
+- **Tests:** the pytest suite ports the Android JVM tests' spirit —
+  parser hostility and rails, gate rejections (including the
+  duplicate-flood game), allowlist precedence, sinkhole byte
+  layout, updater atomicity and kept copies, forwarder spoof
+  discipline against fake upstreams, the engage/restore discipline
+  against a fake DNS manager, and controller start/stop ordering.
+  One live-socket round-trip test self-skips where the build
+  sandbox blocks unconnected UDP replies; it runs in CI.
+
+Still ahead for this edition: the installer, HUD polish in the
+fleet's final style, a tray/service host, and the release gate
+below (independent audit → fix → re-audit before any public
+release).
+
 ## Edition 3 — Debian/Linux
 
 Starts after the Windows edition lands.
