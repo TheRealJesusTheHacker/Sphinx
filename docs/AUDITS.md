@@ -8,6 +8,161 @@ never merely to make a report prettier).
 
 ---
 
+## Phase 4 audit — profiles, boot, notifications, battery (2026-10-20)
+
+Scope: the boot path's three gates (opt-in, recorded intent,
+consent) and every path that records intent; profile integrity
+(write-through completeness, switch atomicity, deleting the active
+profile); the one-time notification ask; the battery section; doc
+honesty for every Phase 4 claim; and a whole-edition regression
+pass over Phases 1–3.
+
+Method: full read of the Phase 4 commits against the audited
+34762898 tree (local tree verified blob-identical to remote HEAD
+79f9ba13 before starting, and the 34762898→79f9ba13 tree diff shown
+to be exactly the 13 Phase 4 files — nothing outside the phase
+moved); the 90-test JVM suite as baseline (reproduced green;
+bundled list parses to exactly 71,491); a file-level mirror of the
+store's switch sequence run on the JVM with simulated process
+death injected after each live-store write, before and after the
+fixes; the Android layer re-type-checked against android.jar
+(0 errors) after the fixes.
+
+### Fixed
+
+1. **A profile switch never reached the running filter's lists.**
+   Switching writes the profile's allowlist and custom entries into
+   the live stores, but those live only in the service's in-memory
+   lists — and ACTION_RESTART rebuilt only the interface (app
+   rules). The in-memory lists were reloaded at service creation
+   and on ACTION_RELOAD_LISTS, never on a restart. So after
+   switching profiles with the filter on, DNS kept being questioned
+   with the *previous* profile's allowlist and custom entries —
+   indefinitely, until an unrelated reload or a full stop/start —
+   while the app announced the switch had taken. That is the
+   "third, half-applied state" FILTER-SPEC's profile rules forbid:
+   a real stop and start would have loaded the new state whole.
+   A restart now also reloads the lists through the same background
+   reload every list change uses, so a restart applies everything
+   a stop and start would, for every caller. *(SphinxVpnService)*
+
+2. **A switch could silently destroy the profile it switched
+   *from*.** The live-store saves a switch performs ran the
+   write-through sync — by design for edits, wrong for a switch:
+   each save wrote the *incoming* state into the *outgoing*
+   profile's snapshot on disk (the final save restored it from
+   memory, but only if the switch ran to completion). A process
+   death mid-switch left the outgoing profile's snapshot replaced
+   by a partial-or-complete copy of the incoming one, still marked
+   active — the user's saved profile gone, with no error anywhere,
+   against the spec's "the snapshot itself is only read by a
+   switch, never modified." Probed on the JVM with a faithful
+   file-level mirror of the store: death after any of the three
+   writes corrupted the outgoing snapshot. Now a switch's live
+   writes skip the sync, and the active-marker save is computed
+   from a fresh read of the untouched profiles file. Re-probed:
+   the profiles file is byte-identical after a death at every
+   step, both snapshots survive, the live state is at most a
+   prefix of the target (each file holding one of the user's own
+   states), and a clean switch is unchanged. *(ListStore)*
+
+3. **Boot auto-start raced Android's foreground-service
+   deadline.** The boot receiver is the only caller of
+   startForegroundService, which gives the service a few seconds
+   to call startForeground before the system kills the app
+   (ForegroundServiceDidNotStartInTimeException on Android 12+) —
+   but the start path waited for the first list load (up to 15 s)
+   before startFilter posted the notification. At boot, with every
+   app on the phone starting at once, a first parse can exceed the
+   deadline: the app would crash at boot, the recorded intent
+   would still say "on," and every later boot would retry the same
+   path until a manual start. The start path now posts the
+   foreground notification *before* waiting for the lists
+   (startFilter posts it again — same ID, a no-op update), and the
+   receiver's start is wrapped so a refused start is a silent
+   no-op, never a crash dialog: boot failing looks exactly like
+   boot not being set. *(SphinxVpnService, BootReceiver)*
+
+4. **The battery dialog could never open.** The per-app
+   exemption dialog (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+   requires the caller to hold the
+   REQUEST_IGNORE_BATTERY_OPTIMIZATIONS permission; the manifest
+   never declared it, so the intent always threw and only the
+   settings-list fallback ever ran — the documented primary path
+   was dead. The permission is now declared (it grants nothing by
+   itself: the dialog is the system's and the choice the user's).
+   Release-gate note: Google Play policy restricts this
+   permission — if a Play listing is ever pursued, re-decide it
+   there; without the declaration the section degrades to the
+   settings list, never to a broken flow. *(AndroidManifest)*
+
+5. **The "profile switched" message overstated the off case.**
+   It read "the filter now runs those rules" — also shown when the
+   filter was off and nothing was running. It now reads "Sphinx
+   now uses those rules," true in both states (the live stores are
+   the rules in force; a running filter is restarted onto them).
+   *(strings.xml)*
+
+### Documented and ignored
+
+- **The restart's list reload lands asynchronously.** The
+  interface restarts synchronously onto the new app rules; the
+  list swap completes on the reload thread moments later, under
+  the same atomic-swap discipline as every list update (a query in
+  the gap is answered with the previous profile's lists). The
+  alternative — blocking the service's main thread on a full list
+  parse — stalls the stop/start itself; the gap is the same
+  eventually-consistent window ACTION_RELOAD_LISTS has always had.
+- **Boot behavior when targetSdk is raised past 34** stays a
+  release-gate re-examination item, as the Phase 4 crew flagged:
+  foreground-service-type rules for BOOT_COMPLETED starts shift
+  between Android releases. At targetSdk 34 the built path is the
+  standard one; nothing about it was assumed silently.
+
+### Verified clean
+
+- **The intent record tells the truth on every path.** Probed by
+  full code read: intent is written in exactly three places —
+  set "off" when establish() fails, set "on" only once the
+  interface is genuinely up, and set "off" in shutdown(), which
+  every stop path runs (toggle, notification stop action,
+  onRevoke, onDestroy, and the restart sequence, which then
+  records "on" again from the fresh start). No path leaves intent
+  "on" over a filter that is off, or "off" over one that is on.
+- **The boot gates hold in order:** opt-in defaults OFF (read
+  from the store, never assumed), intent honored next, consent
+  last — with no consent the receiver returns having shown and
+  started nothing. The receiver is exported for BOOT_COMPLETED
+  only, a protected broadcast only the system can send, and it
+  parses no lists and shows no UI.
+- **Write-through is complete.** Every live rule-state edit path
+  reaches the sync: allowlist and custom entries from the main
+  screen, app rules from the picker (its own restart-on-leave
+  path intact), and the switch — the one place the sync must
+  *not* fire (fixed item 2) — is now the only exception, by
+  explicit flag. Deleting the active profile clears only the
+  marker; the live rules stay, as the spec's profile rules say.
+- **The notification ask is asked once, honestly.** The marker is
+  persisted *before* the system prompt shows; a refusal or
+  dismissal is never re-asked, and the standing note says what is
+  missing (the shade status only) and where to change it. Before
+  Android 13 the flow is a no-op and the hint never appears; if
+  the permission is already granted, no prompt and no hint.
+- **Battery handling never forces anything.** Status is read live
+  from the platform on every resume; the button offers the
+  system's own dialog (fixed item 4) and falls back to the
+  settings list; the app changes no setting itself.
+- **Regression:** the Phase 4 tree diff against the audited Phase
+  3 tree is exactly the phase's 13 files; the full JVM suite
+  passes after the fixes (90/90), including the sinkhole layout,
+  update atomicity, and attribution suites; the Android layer
+  type-checks clean against android.jar. The store/service fixes
+  are verified by the JVM mirror probe, type-check, and code
+  re-read — the same ceiling prior audits worked to on this VM
+  (no instrumented Android runtime here).
+
+---
+
 ## Phase 3 audit — per-app rules and custom entries (2026-10-20)
 
 Scope: the two-capture-mode routing model (the phase's new
