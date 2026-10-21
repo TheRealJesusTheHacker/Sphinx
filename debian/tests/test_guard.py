@@ -297,6 +297,35 @@ def test_resolved_partial_family_points_only_what_was_proven(tmp_path):
     assert view.links["eth0"] == ["127.0.0.1"]
 
 
+def test_resolved_default_link_change_is_a_leftover_not_engaged(tmp_path):
+    # Audit finding 1: the override lives on the link that carried
+    # the default route at engage time. If the route moves, the new
+    # link's DNS bypasses the filter — the state must surface as a
+    # leftover, never read as engaged.
+    view = stub_resolved_view(
+        links={"eth0": ["192.168.1.1"], "wlan0": ["10.0.0.1"]}
+    )
+    guard = _guard(view, tmp_path)
+    assert guard.engage(FakeProofer()).ok
+    assert guard.detect_state() == DnsState.ENGAGED
+    view.link = "wlan0"
+    assert guard.detect_state() == DnsState.LEFTOVER
+
+
+def test_restore_refuses_when_resolv_conf_became_a_symlink(tmp_path):
+    # Audit finding 2: engaged as a plain file; if the file has
+    # since become a symlink another stack owns, restore must not
+    # write over it — it refuses and keeps the record.
+    view = FakeView(resolv=ORIGINAL)
+    guard = _guard(view, tmp_path)
+    assert guard.engage(FakeProofer()).ok
+    view.symlink = "/run/NetworkManager/resolv.conf"
+    result = guard.disengage()
+    assert not result.ok
+    assert "symlink" in result.message
+    assert guard.backup_file.exists()
+
+
 # --- stacks the guard refuses -----------------------------------------------
 
 

@@ -384,6 +384,17 @@ class DnsGuard:
         if record.stack == STACK_DIRECT:
             live = set(nameservers_in(self._view.resolv_conf_bytes()))
         else:
+            # The engagement lives on one link — the one that carried
+            # the default route when Sphinx was turned on. If the
+            # default route has since moved to another link, that
+            # link's DNS was never pointed at the filter, so the
+            # machine is NOT engaged however the recorded link still
+            # reads: the state is a leftover, surfaced for the user,
+            # never a silent bypass wearing an "engaged" label.
+            # (Debian Phase 1 audit, finding 1.)
+            current_default = self._view.default_link()
+            if current_default is not None and current_default != record.link:
+                return False
             live = set(self._view.link_dns(record.link)) if record.link else set()
         return bool(live) and live <= recorded and live <= SPHINX_LOOPBACKS
 
@@ -656,6 +667,22 @@ class DnsGuard:
                         False,
                         "The saved record could not be read back, so "
                         "nothing was changed and the record was kept.",
+                    )
+                if self._view.resolv_conf_symlink_target() is not None:
+                    # The file Sphinx engaged was a plain file; it
+                    # has since become a symlink another stack owns.
+                    # Writing through (or over) it would break that
+                    # stack's structure to restore bytes it no longer
+                    # uses — refuse, keep the record, and say so.
+                    # (Debian Phase 1 audit, finding 2.)
+                    return RestoreResult(
+                        False,
+                        "/etc/resolv.conf has become a symlink since "
+                        "Sphinx was turned on — another resolver setup "
+                        "owns it now, so Sphinx will not write over "
+                        "it. The saved record was kept; check the new "
+                        "setup's DNS by hand, then sudo sphinx dismiss "
+                        "retires the record.",
                     )
                 self._view.write_resolv_conf(original)
                 if self._view.resolv_conf_bytes() != original:
