@@ -6,6 +6,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+      So the Phase 3 app-rules picker can list the phone's installed
+      apps. The list is read on the device, for that screen only: it
+      is never transmitted anywhere, and all Sphinx stores is the
+      package names the user picked rules for. (Android 11+ hides
+      other apps' packages from an app unless it holds this.)
+    -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <application
         android:allowBackup="false"
@@ -21,6 +29,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The Phase 3 per-app rules picker. Opened only from
+             inside Sphinx; not exported. -->
+        <activity
+            android:name=".AppPickerActivity"
+            android:exported="false"
+            android:label="@string/section_apps" />
 
         <!--
           The filter itself. BIND_VPN_SERVICE means only the Android

@@ -37,6 +37,31 @@
     <string name="button_allow_add">Add to allowlist</string>
     <string name="button_allow_remove">Remove typed domain</string>
 
+    <!-- Custom block entries (Phase 3) -->
+    <string name="section_custom">Your block list — custom entries</string>
+    <string name="custom_explainer">Domains you block yourself, on top of every downloaded list. A custom entry works exactly like a list entry — the domain and everything under it — and your allowlist still wins over it.</string>
+    <string name="custom_empty">No custom entries yet.</string>
+    <string name="button_custom_add">Block this domain</string>
+    <string name="button_custom_remove">Remove typed domain</string>
+
+    <!-- App rules (Phase 3) -->
+    <string name="section_apps">App rules</string>
+    <string name="apps_explainer">Two rules you can set per app. Exclude: Sphinx never filters the app — the fix for an app that breaks, like a bank or another VPN. Block: the app gets no network at all while Sphinx is on. One honest catch: Android runs the gate one way at a time, so while any app is blocked outright, your other apps connect without DNS filtering — blocking is a lockdown, not a filter setting. Rule changes rebuild the filter when you leave the app list.</string>
+    <string name="rules_none">No app rules set.</string>
+    <string name="rules_blocked_line">Blocked (no network): %1$s</string>
+    <string name="rules_excluded_line">Not filtered: %1$s</string>
+    <string name="drops_summary">Packets dropped from blocked apps: %1$d</string>
+    <string name="drops_line">%1$s — %2$d dropped</string>
+    <string name="drops_unknown_app">unknown app</string>
+    <string name="button_choose_apps">Choose apps…</string>
+    <string name="picker_explainer">Tap an app to set its rule. Only apps that can use the network are listed.</string>
+    <string name="picker_search_hint">Search apps</string>
+    <string name="picker_rule_none">No rule</string>
+    <string name="picker_rule_block">Block — no network at all</string>
+    <string name="picker_rule_exclude">Exclude — never filtered</string>
+    <string name="picker_rule_blocked_short">BLOCKED</string>
+    <string name="picker_rule_excluded_short">NOT FILTERED</string>
+
     <!-- Query log (Phase 2) -->
     <string name="section_log">Query log</string>
     <string name="log_explainer">The most recent lookups Sphinx questioned — kept only in memory on this phone, never sent anywhere, and gone when the app\'s process stops. Recording is on by default so you can see Sphinx working; turn it off any time.</string>

@@ -12,6 +12,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import com.sentinelsafeguard.sphinx.core.Blocklist
+import com.sentinelsafeguard.sphinx.core.DropCounts
 import com.sentinelsafeguard.sphinx.core.ListSource
 import com.sentinelsafeguard.sphinx.lists.ListStore
 import com.sentinelsafeguard.sphinx.lists.ListUpdater
@@ -23,10 +24,12 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Sphinx's UI: the Phase 1 toggle and counters, plus Phase 2's list
+ * Sphinx's UI: the Phase 1 toggle and counters, Phase 2's list
  * controls — list status and updates, the list-source editor, the
- * allowlist, and the on-device query log. Plain Android views, no UI
- * toolkit dependencies; visual polish is Phase 4.
+ * allowlist, and the on-device query log — and Phase 3's custom block
+ * entries and app rules (the summary here; the picker itself is
+ * [AppPickerActivity]). Plain Android views, no UI toolkit
+ * dependencies; visual polish is Phase 4.
  *
  * Heavy work (parsing lists, downloading updates) always runs on a
  * background thread; this activity only renders results.
@@ -48,6 +51,15 @@ class MainActivity : Activity() {
     private lateinit var allowlistItemsText: TextView
     private lateinit var addAllowButton: Button
     private lateinit var removeAllowButton: Button
+
+    private lateinit var customEdit: EditText
+    private lateinit var customItemsText: TextView
+    private lateinit var addCustomButton: Button
+    private lateinit var removeCustomButton: Button
+
+    private lateinit var rulesSummaryText: TextView
+    private lateinit var dropsText: TextView
+    private lateinit var chooseAppsButton: Button
 
     private lateinit var logToggle: Switch
     private lateinit var logItemsText: TextView
@@ -93,6 +105,20 @@ class MainActivity : Activity() {
         removeAllowButton = findViewById(R.id.removeAllowButton)
         removeAllowButton.setOnClickListener { onAllowlistChange(add = false) }
 
+        customEdit = findViewById(R.id.customEdit)
+        customItemsText = findViewById(R.id.customItemsText)
+        addCustomButton = findViewById(R.id.addCustomButton)
+        addCustomButton.setOnClickListener { onCustomBlockChange(add = true) }
+        removeCustomButton = findViewById(R.id.removeCustomButton)
+        removeCustomButton.setOnClickListener { onCustomBlockChange(add = false) }
+
+        rulesSummaryText = findViewById(R.id.rulesSummaryText)
+        dropsText = findViewById(R.id.dropsText)
+        chooseAppsButton = findViewById(R.id.chooseAppsButton)
+        chooseAppsButton.setOnClickListener {
+            startActivity(Intent(this, AppPickerActivity::class.java))
+        }
+
         logToggle = findViewById(R.id.logToggle)
         logToggle.isChecked = store.queryLogEnabled()
         logToggle.setOnCheckedChangeListener { _, checked ->
@@ -109,11 +135,15 @@ class MainActivity : Activity() {
 
         refreshUi()
         refreshAllowlistView()
+        refreshCustomView()
+        refreshRulesView()
         refreshListStatus()
     }
 
     override fun onResume() {
         super.onResume()
+        // The app picker may have changed the rules while we were gone.
+        refreshRulesView()
         handler.post(refresh)
     }
 
@@ -231,6 +261,89 @@ class MainActivity : Activity() {
         }
     }
 
+    // --- Custom block entries (Phase 3) ----------------------------------
+
+    private fun onCustomBlockChange(add: Boolean) {
+        // Entry validation is the parser's, per the Phase 2 audit
+        // rule: normalizeEntry or nothing — an entry the matcher
+        // would never honor is refused where it is typed.
+        val name = Blocklist.normalizeEntry(customEdit.text.toString())
+        if (name == null) {
+            toast(getString(R.string.allowlist_bad_domain))
+            return
+        }
+        val entries = store.customBlockEntries().toMutableSet()
+        if (add) entries.add(name) else entries.remove(name)
+        store.saveCustomBlockEntries(entries)
+        customEdit.text.clear()
+        refreshCustomView()
+        notifyServiceReload()
+    }
+
+    private fun refreshCustomView() {
+        val entries = store.customBlockEntries()
+        customItemsText.text = if (entries.isEmpty()) {
+            getString(R.string.custom_empty)
+        } else {
+            entries.joinToString("\n")
+        }
+    }
+
+    // --- App rules (Phase 3) -----------------------------------------------
+
+    private fun refreshRulesView() {
+        val rules = store.loadAppRules()
+        if (rules.isEmpty) {
+            rulesSummaryText.text = getString(R.string.rules_none)
+            return
+        }
+        val lines = ArrayList<String>()
+        for (pkg in rules.blockedPackages.sorted()) {
+            lines.add(getString(R.string.rules_blocked_line, labelFor(pkg)))
+        }
+        for (pkg in rules.excludedPackages.sorted()) {
+            lines.add(getString(R.string.rules_excluded_line, labelFor(pkg)))
+        }
+        rulesSummaryText.text = lines.joinToString("\n")
+    }
+
+    /** Drop counters are in-memory service state; the label cache
+     *  keeps the periodic refresh from re-asking the package manager
+     *  for the same names every half second. */
+    private val labelCache = HashMap<String, String>()
+
+    private fun labelFor(packageName: String): String {
+        labelCache[packageName]?.let { return it }
+        val label = try {
+            val info = packageManager.getApplicationInfo(packageName, 0)
+            packageManager.getApplicationLabel(info).toString()
+        } catch (e: Exception) {
+            packageName
+        }
+        labelCache[packageName] = label
+        return label
+    }
+
+    private fun refreshDropsView() {
+        val total = SphinxVpnService.droppedPacketCount.get()
+        if (total == 0L) {
+            dropsText.text = ""
+            return
+        }
+        val lines = ArrayList<String>()
+        lines.add(getString(R.string.drops_summary, total))
+        val snapshot = SphinxVpnService.dropCounts.snapshot()
+        for ((pkg, count) in snapshot.entries.sortedByDescending { it.value }) {
+            val who = if (pkg == DropCounts.UNATTRIBUTED) {
+                getString(R.string.drops_unknown_app)
+            } else {
+                labelFor(pkg)
+            }
+            lines.add(getString(R.string.drops_line, who, count))
+        }
+        dropsText.text = lines.joinToString("\n")
+    }
+
     // --- Rendering ---------------------------------------------------------
 
     private fun refreshUi() {
@@ -243,6 +356,7 @@ class MainActivity : Activity() {
         )
         blockedText.text = getString(R.string.counter_blocked, SphinxVpnService.blockedCount.get())
         allowedText.text = getString(R.string.counter_allowed, SphinxVpnService.allowedCount.get())
+        refreshDropsView()
         refreshLogView(force = false)
     }
 
