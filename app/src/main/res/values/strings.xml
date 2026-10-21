@@ -78,7 +78,7 @@
     <string name="profile_name_hint">Profile name</string>
     <string name="profile_created">Profile saved — it\'s now the active profile.</string>
     <string name="profile_bad_name">That name can\'t be used — it may be taken already, empty, or too long.</string>
-    <string name="profile_switched">Profile switched — the filter now runs those rules.</string>
+    <string name="profile_switched">Profile switched — Sphinx now uses those rules.</string>
     <string name="profile_deleted">Profile deleted. Your current rules are unchanged.</string>
 
     <string name="section_boot">Start on boot</string>

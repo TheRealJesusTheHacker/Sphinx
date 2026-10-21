@@ -21,6 +21,17 @@
       if the user opted in AND left the filter on (BootReceiver).
     -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!--
+      Lets the Phase 4 battery section offer Android's own per-app
+      "stop optimizing battery use?" dialog
+      (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS requires the
+      caller to hold this). The permission grants nothing by itself:
+      the dialog is the system's, the choice is the user's, and
+      Sphinx never changes the setting — without this declaration
+      the intent always fails and only the settings-list fallback
+      would ever run (Phase 4 audit finding).
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="false"
