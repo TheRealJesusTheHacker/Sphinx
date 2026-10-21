@@ -4,6 +4,12 @@ promise — create snapshots the live rules, a switch lands the
 whole profile in the live editors and the filter, a delete removes
 only the snapshot. Plus the tray icon's three palette states.
 
+Windows are torn down deterministically (timer stopped, closed,
+deleteLater pumped): a MainWindow's one-second refresh timer left
+running into interpreter shutdown races Qt's teardown and can
+crash the test process after a green summary — the suite must
+exit as cleanly as it reports.
+
 Skipped wherever PySide6 isn't installed (the store suites carry
 the logic); CI installs it.
 """
@@ -43,7 +49,8 @@ class FakeServer:
         self.stopped = True
 
 
-def make_window(tmp_path):
+@pytest.fixture
+def qt_window(tmp_path):
     from PySide6.QtWidgets import QApplication
 
     from sphinx_win.app.tray_app import MainWindow
@@ -55,23 +62,28 @@ def make_window(tmp_path):
         store, manager, tmp_path / "data", server_factory=FakeServer
     )
     window = MainWindow(controller, elevated=True)
-    return app, window, controller
+    yield app, window, controller
+    window._timer.stop()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+    app.sendPostedEvents()
 
 
 def editor_texts(widget):
     return [widget.item(i).text() for i in range(widget.count())]
 
 
-def test_window_has_an_empty_profiles_section(tmp_path):
-    app, window, controller = make_window(tmp_path)
+def test_window_has_an_empty_profiles_section(qt_window):
+    app, window, controller = qt_window
     assert "No profiles yet" in window.profile_status_label.text()
     assert window.profile_combo.count() == 0
     assert not window.profile_switch_button.isEnabled()
     app.processEvents()
 
 
-def test_create_switch_delete_through_the_window(tmp_path):
-    app, window, controller = make_window(tmp_path)
+def test_create_switch_delete_through_the_window(qt_window):
+    app, window, controller = qt_window
     store = controller.store
 
     # Rules for profile A, created through the window's helper.
