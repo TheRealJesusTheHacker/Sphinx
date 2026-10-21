@@ -404,7 +404,8 @@ the implementation as landed and audited (2026-10-21):
   watches the store's files and reloads the whole working set
   when they change, so updates, rule edits (`sphinx allow` /
   `sphinx block`), and profile switches (`sphinx profile`) land
-  in the running filter without a restart, never half-applied.
+  in the running filter without a restart, each reload applied
+  as one whole set.
   Profiles capture the allowlist and the custom entries only —
   sources and blocklists stay shared, so a switch is never a
   disguised list change. The update sources are the spec's two

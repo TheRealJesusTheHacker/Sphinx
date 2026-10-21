@@ -8,6 +8,214 @@ never merely to make a report prettier).
 
 ---
 
+## Debian Phase 2 audit — FILTER-SPEC parity + resumption (2026-10-21)
+
+Scope: the Debian edition's Phase 2 (commits 1a889fc..8be56d0):
+the list updater, the rule/profile stores with the daemon's
+watched-file live reload, profiles parity against the Android
+Phase 4 / Windows Phase 3 audit battery, and the resumption
+story — the guard's retargeting of a resolved engagement whose
+default route moved, the status reconciliation, and the
+store.json / state.json separation.
+
+Method: full read of the Phase 2 diff; the pytest suite as
+baseline (reproduced: 141 passed / 9 skipped — the skips are
+this sandbox's blocked UDP loopback, which CI covers); CI for
+the audited HEAD green (run 39567233901); a locally built .deb
+whose payload was inspected and whose *extracted* package was
+smoke-run (allow / block / profile save-use-list / status /
+version, against a scratch state dir); and adversarial probes
+beyond the suite: redirect chains through a scripted opener,
+all-or-nothing byte-identity, crash injection during the swap
+and during a single file's temp write, store writes under a
+restrictive umask read back as an unprivileged uid, a
+same-size edit with its mtime forged back, a write/reload
+hammer, process-death injection after each write of a profile
+switch, retarget failure injected at each step of the sequence,
+concurrent store/intent writers, and the upgrade-disengage path.
+
+### Fixed
+
+1. **MEDIUM — Root-written store and guard files inherited the
+   writer's umask; under a restrictive umask the daemon could
+   not read its own rules.** Both `write_atomically` helpers
+   (the store's, and the resolver's, which writes the guard's
+   record + intent files) created files with whatever mode the
+   process umask allowed. Probe: with umask 027 — a common
+   hardening default — every file the root CLI wrote landed
+   0640 root:root, and an unprivileged uid in the packaged
+   layout (0755 state directory) could not read any of them.
+   On such a machine the CLI would report rules added while
+   the daemon kept its last good set, and a daemon restart
+   would refuse to start over lists it cannot read (with a
+   message blaming the bundled list). Default-umask machines
+   (022 → 0644) were never affected, which is why the suite —
+   run under 022 — saw nothing. The fix is the split's own
+   logic made explicit: the temp file is chmodded 0644 before
+   the rename (and the staged-copy fallback likewise; copyfile
+   does not carry modes), and the store helper also pins its
+   directory at 0755, matching postinst. Store and guard files
+   hold rules, lists, and prior resolver configuration — world-
+   readable before Sphinx touches it, no secrets, no query
+   data — so 0644 is the right mode, stated in the code.
+   Regression pins in tests/test_audit_p2_fixes.py write under
+   umask 027 and assert the modes. *(core/store.py,
+   resolver/systemview.py)*
+2. **LOW — The daemon's watched-file signature (mtime + size)
+   could be forged into a silent miss.** A same-size edit
+   whose mtime was set back to the previous value (utime, a
+   file-restore tool) produced an identical signature, and the
+   running filter would have served the old rules indefinitely
+   — until some other watched file happened to change. Probed
+   exactly so. The store's own writes are temp-and-rename, so
+   every real edit also changes the inode, and ctime moves on
+   any write or rename and cannot be set back by any tool; the
+   signature now includes both. Probe after the fix: the
+   forged-mtime edit is detected. Regression-pinned.
+   *(daemon.py)*
+
+### Documented and ignored
+
+- **A crash between an update's per-file swaps leaves a mixed
+  set — whole files, gate-passing, honestly reported.**
+  Downloads are fully staged and gated before any write (the
+  all-or-nothing discipline, probed byte-exact: a failed
+  source moves no file and not the recorded time), but the
+  swap itself is one atomic rename per file, in sequence. A
+  crash after the first rename leaves that source new and the
+  other at its previous copy; the daemon then loads the union
+  — every file whole, the union passing the ≥1,000-unique
+  gate — while the recorded last-updated time stays at the
+  previous update, saying so. The next successful update
+  heals it. A cross-file transaction (versioned set
+  directories, pointer flips) is machinery out of proportion
+  to two files whose every state is a valid, gated list; the
+  other editions' updaters share this shape. FILTER-SPEC's
+  Debian notes now say "each reload applied as one whole
+  set" rather than the stronger phrase this replaces, and the
+  same per-set (not cross-write) observation applies to
+  multi-file rule edits and profile switches reaching the
+  daemon: successive whole sets, both of them the user's own
+  valid states, for the milliseconds a root CLI spends
+  writing — the Windows Phase 3 audit's per-file disposition,
+  one process boundary wider.
+- **One downloaded file corrupted on disk does not fall back
+  to the bundled list while the other source's copy is
+  valid** — the union of the gate-passing downloaded files
+  rules (probed: one garbage file → the surviving source's
+  1,500 domains in force; both garbage → the bundled floor
+  returns, 71,491). Downloaded files only ever land through
+  the gated, atomic update path, so on-disk corruption means
+  disk damage or a hand edit; "if no valid downloaded list
+  exists, the bundled list is the blocklist" (FILTER-SPEC) is
+  the rule, and a valid downloaded list exists. The daemon
+  start gate still refuses to run listless, and deleting the
+  downloaded lists returns the bundled floor exactly
+  (probed).
+
+### Verified clean (probed independently)
+
+- **Updater discipline:** a redirect hop that downgrades to
+  HTTP fails the download; an HTTPS hop to another host is
+  followed; relative and protocol-relative Locations are
+  resolved and vetted; a redirect without a Location fails;
+  a plain-HTTP start is refused before any request. The
+  unique-domain gate counts uniques (a 4,998-line file with
+  999 unique domains fails; two identical 1,000-domain
+  sources merge to exactly 1,000 and pass). A death during a
+  file's temp write leaves the previous file byte-identical.
+  Deleting the downloaded lists returns the bundled floor.
+  No timer, cron, or scheduler exists anywhere in the debian
+  tree or its unit — updates are `sphinx update`, by hand.
+- **Stores + reload:** CLI entry rails refuse garbage with
+  the file byte-unchanged (reserved name, IP literal probed
+  through the real CLI). A 60-write / 300-read hammer
+  against the running reload served only whole states and
+  never raised. Store files contain rules and lists only —
+  names the engine answered were confirmed present in the
+  memory-only query log and absent from every file in the
+  state directory.
+- **Profiles — the full Android P4 battery, re-probed:** a
+  switch reaches the running daemon completely (incoming
+  custom entry blocked at the engine's decision point,
+  outgoing gone, files + marker exact); process death after
+  write 1, 2, or 3 of a switch leaves both snapshots intact
+  and every live file holding one whole state, with
+  profiles.txt byte-identical before the marker write; the
+  only sync-off save callers in the tree are the switch's
+  two live writes (grep-proved); a switch touches only the
+  two live rule files plus the marker — sources, downloaded
+  lists, and the update record byte-identical; deleting the
+  active profile clears only the marker; a garbage profiles
+  file degrades and never touches live rules.
+- **Retargeting, probed adversarially at each step:** with
+  the route moved eth0→wlan0 — failure injected at the
+  new-record save (after the old override was undone) refuses,
+  names the undo in plain language, leaves the new link
+  unpointed, the on-disk record and the intent record
+  byte-unchanged, and a plain retry completes the retarget;
+  failure at the point step (after the new record saved)
+  rolls the new link back, keeps the *new* link's record
+  (truthful and restorable — a restore against it then
+  succeeds), writes no intent, and reads LEFTOVER; a new
+  link whose DNS already holds a loopback refuses before
+  any resolver call at all — the old override stands, the
+  record untouched. The new link's originals are saved and
+  verified before pointing in every path (the same toll as
+  a fresh engage).
+- **Intent + separation:** intent is written only at the
+  guard's verified transitions — failed retargets at either
+  step leave state.json byte-identical (probed). Forty
+  concurrent store-scalar writes against forty intent
+  writes: both files valid, each holding only its own keys.
+  An upgrade's restore (prerm's path) retires the record
+  and records intent OFF, and the daemon's resumption note
+  stays silent afterward — the documented decision is the
+  code's behavior.
+- **Phase 1 gates, regression-probed:** proof-before-pointing
+  (no proof → no record, no writes), byte-exact direct
+  restore, the restore symlink refusal, the record-gated
+  prerm, truthful status (the resumption block appears only
+  for LEFTOVER + intent on; the suite pins both branches),
+  the 64-slot cap, and the memory-only log all stand; the
+  Phase 2 status additions (Lists line, recorded-decision
+  line) read from the daemon's own stats or the store's own
+  status — no new way to lie was found.
+
+### Verification ceiling, stated plainly
+
+As with the other editions: the guard and retargeting are
+proven on fakes, the package in a build VM and CI, the daemon
+on loopback sockets, and the extracted package's CLI against
+a scratch state dir. No real Debian machine's DNS has been
+engaged by the Phase 2 paths. The real-machine pass — install
+→ engage → reboot (resumption surface) → route change
+(retarget) → restore → remove, on Debian and Kali/Parrot —
+remains release-gate work, owed before this edition is called
+done, exactly as with Android's real-device pass and Windows'
+real-machine proofs.
+
+### Verdict
+
+Phase 2 is what it claimed: the parity gap the Phase 1 audit
+recorded is closed — updates under the spec's rules at full
+all-or-nothing strength, stores the daemon reloads live,
+profiles at true parity (the Android Phase 4 corruption
+scenario designed out and probed shut), and a resumption
+story that surfaces instead of acting, with retargeting that
+keeps the fleet's discipline at every failure step probed.
+The two findings were a umask the split writer/reader model
+had not priced in, and a watch signature that could be
+forged; both are fixed and regression-pinned (suite: 144).
+**The Debian edition is feature-complete at parity with the
+Android and Windows editions.** What remains for Sphinx as a
+whole is the release gate itself — signed builds, published
+checksums verified by re-download, the three editions'
+real-hardware proofs, and the Toolkit ingestion — not more
+features.
+
+---
+
 ## Debian Phase 1 audit — daemon, engage/restore guard, .deb (2026-10-21)
 
 Scope: the Debian edition's Phase 1 as landed in a0d1a4c6 (the
