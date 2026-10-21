@@ -7,6 +7,8 @@ import com.sentinelsafeguard.sphinx.core.Blocklist
 import com.sentinelsafeguard.sphinx.core.FilterLists
 import com.sentinelsafeguard.sphinx.core.ListSource
 import com.sentinelsafeguard.sphinx.core.ListValidation
+import com.sentinelsafeguard.sphinx.core.ProfileSet
+import com.sentinelsafeguard.sphinx.core.RuleState
 import java.io.File
 import java.security.MessageDigest
 
@@ -29,6 +31,7 @@ class ListStore(context: Context) {
     private val allowlistFile = File(appContext.filesDir, "allowlist.txt")
     private val customBlockFile = File(appContext.filesDir, "custom-block.txt")
     private val appRulesFile = File(appContext.filesDir, "app-rules.txt")
+    private val profilesFile = File(appContext.filesDir, "profiles.txt")
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     // --- Sources --------------------------------------------------------
@@ -179,6 +182,7 @@ class ListStore(context: Context) {
         val normalized = entries.mapNotNull { Blocklist.normalizeEntry(it) }.toSortedSet()
         val text = normalized.joinToString("\n", postfix = "\n")
         writeAtomically(allowlistFile, text.toByteArray(Charsets.UTF_8))
+        syncActiveProfile()
     }
 
     // --- Custom block entries (Phase 3) -------------------------------------
@@ -205,6 +209,7 @@ class ListStore(context: Context) {
         val normalized = entries.mapNotNull { Blocklist.normalizeEntry(it) }.toSortedSet()
         val text = normalized.joinToString("\n", postfix = "\n")
         writeAtomically(customBlockFile, text.toByteArray(Charsets.UTF_8))
+        syncActiveProfile()
     }
 
     // --- App rules (Phase 3) --------------------------------------------------
@@ -219,6 +224,7 @@ class ListStore(context: Context) {
     fun saveAppRules(rules: AppRules) {
         val text = rules.serializeLines().joinToString("\n", postfix = "\n")
         writeAtomically(appRulesFile, text.toByteArray(Charsets.UTF_8))
+        syncActiveProfile()
     }
 
     // --- Query log setting --------------------------------------------------
@@ -232,6 +238,141 @@ class ListStore(context: Context) {
 
     fun setQueryLogEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_LOG_ENABLED, enabled).apply()
+    }
+
+    // --- Profiles (Phase 4) ---------------------------------------------------
+
+    /**
+     * The stored profiles, or an empty set when none were ever saved.
+     * A malformed profiles file degrades to the profiles that parse
+     * (worst case: none) — it can never degrade to a wiped live
+     * ruleset, because profiles and live state are different files,
+     * and the live state changes only through [switchProfile].
+     */
+    fun loadProfileSet(): ProfileSet {
+        if (!profilesFile.isFile) return ProfileSet()
+        return profilesFile.bufferedReader().useLines { lines -> ProfileSet.parse(lines) }
+    }
+
+    private fun saveProfileSet(set: ProfileSet) {
+        val text = set.serializeLines().joinToString("\n", postfix = "\n")
+        writeAtomically(profilesFile, text.toByteArray(Charsets.UTF_8))
+    }
+
+    /** The rule state the filter is actually running with, read back
+     *  from the live stores — what a profile snapshot is taken of. */
+    fun snapshotLiveState(): RuleState = RuleState(
+        appRules = loadAppRules(),
+        allowlistEntries = allowlistEntries(),
+        customBlockEntries = customBlockEntries(),
+    )
+
+    /**
+     * Save the live rule state as a new profile called [name] and
+     * make it the active profile. Returns the updated set, or null
+     * when the name is unusable or already taken.
+     */
+    fun createProfile(name: String): ProfileSet? {
+        val clean = name.trim()
+        if (!ProfileSet.isValidProfileName(clean)) return null
+        val set = loadProfileSet()
+        if (set.profile(clean) != null) return null
+        val next = set
+            .withProfile(ProfileSet.Profile(clean, snapshotLiveState()))
+            .withActive(clean)
+        saveProfileSet(next)
+        return next
+    }
+
+    /**
+     * Make [name]'s snapshot the live rule state and mark it active.
+     * The live stores are written first, each atomically, from the
+     * snapshot — the snapshot is never applied half-way at file
+     * granularity, and a snapshot itself is only read, never
+     * modified, by a switch. Returns false when no such profile
+     * exists; the live state is then untouched.
+     *
+     * The caller restarts the filter (ACTION_RESTART) afterwards —
+     * the audited path — so the new state runs on exactly the
+     * lifecycle a stop and start would have produced.
+     */
+    fun switchProfile(name: String): Boolean {
+        val set = loadProfileSet()
+        val profile = set.profile(name) ?: return false
+        writeLiveState(profile.state)
+        // Saved after the live writes: the save* calls above run the
+        // write-through sync, which reads the profile file — saving
+        // the new active marker last keeps every intermediate state
+        // on disk consistent (a sync during the writes targets the
+        // previously active profile with the state being replaced,
+        // which this save then supersedes).
+        saveProfileSet(set.withActive(profile.name))
+        return true
+    }
+
+    /**
+     * Remove the profile called [name]. The live rule state is
+     * untouched; if the removed profile was active, the active
+     * marker clears and the live rules simply stop being "under"
+     * a profile. Returns false when no such profile exists.
+     */
+    fun deleteProfile(name: String): Boolean {
+        val set = loadProfileSet()
+        if (set.profile(name) == null) return false
+        saveProfileSet(set.withoutProfile(name))
+        return true
+    }
+
+    /** Write a profile snapshot into the three live stores. */
+    private fun writeLiveState(state: RuleState) {
+        saveAppRules(state.appRules)
+        saveAllowlist(state.allowlistEntries)
+        saveCustomBlockEntries(state.customBlockEntries)
+    }
+
+    /**
+     * Write-through: an edit to the live rule state is also an edit
+     * to the active profile, if there is one — the profile is the
+     * configuration, so it must not silently drift from the rules
+     * actually in force. Called at the end of every live rule-state
+     * save; writes only the profiles file, so it cannot recurse.
+     */
+    private fun syncActiveProfile() {
+        val set = loadProfileSet()
+        val active = set.activeProfile ?: return
+        saveProfileSet(set.withProfile(ProfileSet.Profile(active.name, snapshotLiveState())))
+    }
+
+    // --- Staying on: boot + notification settings (Phase 4) -------------------
+
+    /**
+     * The user's on/off intent, recorded by the service every time
+     * the filter actually starts or stops. Boot auto-start honors
+     * THIS — not whether the process happens to be alive: "restart
+     * what I left on; leave off what I turned off."
+     */
+    fun filterOnIntent(): Boolean = prefs.getBoolean(KEY_FILTER_ON, false)
+
+    fun setFilterOnIntent(on: Boolean) {
+        prefs.edit().putBoolean(KEY_FILTER_ON, on).apply()
+    }
+
+    /** Boot auto-start is opt-in: off until the user turns it on. */
+    fun bootAutoStartEnabled(): Boolean = prefs.getBoolean(KEY_BOOT_AUTOSTART, false)
+
+    fun setBootAutoStartEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_BOOT_AUTOSTART, enabled).apply()
+    }
+
+    /**
+     * Whether the notification-permission ask has been shown. The
+     * ask happens once: a refusal is the user's answer, and the app
+     * explains the consequence in place instead of nagging.
+     */
+    fun notificationAsked(): Boolean = prefs.getBoolean(KEY_NOTIFICATION_ASKED, false)
+
+    fun setNotificationAsked() {
+        prefs.edit().putBoolean(KEY_NOTIFICATION_ASKED, true).apply()
     }
 
     // --- Internals ----------------------------------------------------------
@@ -255,5 +396,8 @@ class ListStore(context: Context) {
         private const val KEY_LAST_UPDATED = "last_updated"
         private const val KEY_DOWNLOADED_COUNT = "downloaded_count"
         private const val KEY_LOG_ENABLED = "query_log_enabled"
+        private const val KEY_FILTER_ON = "filter_on_intent"
+        private const val KEY_BOOT_AUTOSTART = "boot_autostart"
+        private const val KEY_NOTIFICATION_ASKED = "notification_asked"
     }
 }

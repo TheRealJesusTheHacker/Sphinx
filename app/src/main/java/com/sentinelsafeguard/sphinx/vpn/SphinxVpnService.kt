@@ -250,12 +250,17 @@ class SphinxVpnService : VpnService() {
         }
         val descriptor = builder!!.establish()
         if (descriptor == null) {
+            store.setFilterOnIntent(false)
             stopSelf()
             return
         }
         tunInterface = descriptor
         running = true
         isRunning = true
+        // The filter is genuinely on: record the user's intent, so
+        // boot auto-start (Phase 4, opt-in) restarts what was left
+        // on — and only what was left on.
+        store.setFilterOnIntent(true)
         readerThread = Thread(
             { packetLoop(descriptor, mode) },
             "sphinx-tun-reader",
@@ -528,6 +533,10 @@ class SphinxVpnService : VpnService() {
     private fun shutdown() {
         running = false
         isRunning = false
+        // The filter is off from here: record it. (A restart calls
+        // shutdown() and then startFilter(), which records "on"
+        // again once the new interface is genuinely up.)
+        store.setFilterOnIntent(false)
         workers.shutdownNow()
         try {
             tunInterface?.close()
