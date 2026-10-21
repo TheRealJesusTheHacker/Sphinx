@@ -64,11 +64,29 @@ class ListStore(context: Context) {
      * behind — the old file is either fully replaced or fully kept.
      */
     fun writeDownloaded(source: ListSource, bytes: ByteArray) {
-        val target = fileFor(source)
-        val temp = File(listsDir, target.name + ".tmp")
+        writeAtomically(fileFor(source), bytes)
+    }
+
+    /**
+     * Write [bytes] to [target] so the file is never left torn: write
+     * a temp file, then rename it over the target (atomic on Android).
+     * If the rename ever refuses, stage the copy under a second name
+     * and rename *that* — copying straight over the target is not an
+     * option, because a crash mid-copy would leave half a file behind
+     * (and a half-written list can still pass the sanity gate as a
+     * silently weaker list). If even the staged rename fails, the old
+     * file stays and the temps are cleaned up.
+     */
+    private fun writeAtomically(target: File, bytes: ByteArray) {
+        val dir = target.parentFile ?: listsDir
+        val temp = File(dir, target.name + ".tmp")
         temp.writeBytes(bytes)
-        if (!temp.renameTo(target)) {
-            temp.copyTo(target, overwrite = true)
+        if (temp.renameTo(target)) return
+        val swap = File(dir, target.name + ".swap")
+        try {
+            temp.copyTo(swap, overwrite = true)
+            if (!swap.renameTo(target)) swap.delete()
+        } finally {
             temp.delete()
         }
     }
@@ -147,8 +165,12 @@ class ListStore(context: Context) {
     }
 
     fun saveAllowlist(entries: Collection<String>) {
-        val normalized = entries.mapNotNull { Blocklist.normalize(it) }.toSortedSet()
-        allowlistFile.writeText(normalized.joinToString("\n", postfix = "\n"))
+        // Entry validation, not mere normalization: an entry the
+        // loader would drop (single label, reserved name) must not be
+        // stored as if it were in force.
+        val normalized = entries.mapNotNull { Blocklist.normalizeEntry(it) }.toSortedSet()
+        val text = normalized.joinToString("\n", postfix = "\n")
+        writeAtomically(allowlistFile, text.toByteArray(Charsets.UTF_8))
     }
 
     // --- Query log setting --------------------------------------------------

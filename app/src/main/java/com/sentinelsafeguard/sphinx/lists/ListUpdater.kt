@@ -75,6 +75,14 @@ class ListUpdater(private val store: ListStore) {
             return Result(success = false, totalDomains = 0, outcomes = outcomes)
         }
 
+        if (stagedBytes.isEmpty()) {
+            // Every source failed and the gate passed only on copies
+            // already on disk. Nothing was downloaded, so this is a
+            // failed update — and a failed update changes nothing,
+            // including the recorded last-updated time.
+            return Result(success = false, totalDomains = 0, outcomes = outcomes)
+        }
+
         for ((source, bytes) in stagedBytes) {
             store.writeDownloaded(source, bytes)
         }
@@ -92,32 +100,56 @@ class ListUpdater(private val store: ListStore) {
         return parsed.size
     }
 
-    /** Fetch [url] over HTTPS; null on any failure or an oversized body. */
+    /**
+     * Fetch [url] over HTTPS; null on any failure or an oversized body.
+     *
+     * Redirects are followed by hand, at most [MAX_REDIRECTS], and every
+     * hop is checked with [ListValidation.redirectTarget]: a download
+     * that starts on HTTPS must stay on HTTPS. The platform's automatic
+     * redirect handling is not trusted to refuse an HTTPS → HTTP
+     * downgrade on every Android version, and a downgraded hop would
+     * let anyone on the network path substitute a different list.
+     */
     private fun download(url: String): ByteArray? {
         if (!ListSource.isAcceptableUrl(url)) return null
-        var connection: HttpURLConnection? = null
-        return try {
-            connection = URL(url).openConnection() as HttpURLConnection
-            connection.connectTimeout = CONNECT_TIMEOUT_MS
-            connection.readTimeout = READ_TIMEOUT_MS
-            connection.instanceFollowRedirects = true
-            connection.setRequestProperty("User-Agent", USER_AGENT)
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
-            val out = ByteArrayOutputStream()
-            val buffer = ByteArray(64 * 1024)
-            connection.inputStream.use { input ->
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read < 0) break
-                    if (out.size() + read > MAX_LIST_BYTES) return null
-                    out.write(buffer, 0, read)
+        var current = url
+        var hops = 0
+        while (true) {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = URL(current).openConnection() as HttpURLConnection
+                connection.connectTimeout = CONNECT_TIMEOUT_MS
+                connection.readTimeout = READ_TIMEOUT_MS
+                connection.instanceFollowRedirects = false
+                connection.setRequestProperty("User-Agent", USER_AGENT)
+                val code = connection.responseCode
+                if (code == HttpURLConnection.HTTP_OK) {
+                    val out = ByteArrayOutputStream()
+                    val buffer = ByteArray(64 * 1024)
+                    connection.inputStream.use { input ->
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            if (out.size() + read > MAX_LIST_BYTES) return null
+                            out.write(buffer, 0, read)
+                        }
+                    }
+                    return out.toByteArray()
                 }
+                if (code in REDIRECT_CODES && hops < MAX_REDIRECTS) {
+                    current = ListValidation.redirectTarget(
+                        current,
+                        connection.getHeaderField("Location"),
+                    ) ?: return null
+                    hops++
+                    continue
+                }
+                return null
+            } catch (e: Exception) {
+                return null
+            } finally {
+                connection?.disconnect()
             }
-            out.toByteArray()
-        } catch (e: Exception) {
-            null
-        } finally {
-            connection?.disconnect()
         }
     }
 
@@ -127,6 +159,8 @@ class ListUpdater(private val store: ListStore) {
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 30_000
         private const val MAX_LIST_BYTES = 32 * 1024 * 1024
+        private const val MAX_REDIRECTS = 5
+        private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
         private const val USER_AGENT = "Sphinx/0.2 (Android blocklist update)"
     }
 }

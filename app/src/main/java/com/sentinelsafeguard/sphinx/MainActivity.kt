@@ -209,7 +209,7 @@ class MainActivity : Activity() {
     // --- Allowlist (Phase 2) ---------------------------------------------
 
     private fun onAllowlistChange(add: Boolean) {
-        val name = Blocklist.normalize(allowlistEdit.text.toString())
+        val name = Blocklist.normalizeEntry(allowlistEdit.text.toString())
         if (name == null) {
             toast(getString(R.string.allowlist_bad_domain))
             return
