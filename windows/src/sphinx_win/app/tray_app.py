@@ -973,7 +973,14 @@ class TrayHost:
         """The audited stop, then exit: restore DNS, verify, and
         only then go. A failed restore refuses the quit — Sphinx
         stays in the tray rather than leave the machine pointed at
-        a stopped filter."""
+        a stopped filter.
+
+        The not-running ENGAGED case (a reboot into NEEDS_ADMIN:
+        DNS still points at Sphinx, but this host serves nothing
+        and, without administrator rights, cannot restore either)
+        must not exit silently through this one unguarded path:
+        quitting abandons the engagement, so the user is warned
+        and must confirm it explicitly (Sweep #3, W-2)."""
         if self.controller.running:
             try:
                 self.controller.stop()
@@ -987,6 +994,28 @@ class TrayHost:
                     f"at a stopped filter.\n\n{e}",
                 )
                 return False
+        else:
+            try:
+                state = self.controller.dns_state()
+            except Exception:
+                state = None  # unreadable state never traps the user
+            if state is DnsState.ENGAGED:
+                answer = QMessageBox.question(
+                    self.window,
+                    "DNS still points at Sphinx",
+                    "Sphinx is not running, but this machine's DNS "
+                    "still points at Sphinx — and nothing is serving "
+                    "it. Quitting leaves it pointing there; DNS "
+                    "lookups will fail until Sphinx runs again.\n\n"
+                    "Restart Sphinx as administrator to resume "
+                    "filtering or restore your previous DNS settings, "
+                    "or quit anyway and leave DNS as it is.",
+                    QMessageBox.StandardButton.Yes
+                    | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return False
         self._quit_fn()
         return True
 

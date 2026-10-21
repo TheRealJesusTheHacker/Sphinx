@@ -150,6 +150,68 @@ class TestTrayHost:
         assert quit_calls == []  # never quit over a failed restore
         assert controller.running
 
+    def test_quit_while_engaged_but_not_running_needs_confirmation(
+        self, tmp_path, monkeypatch
+    ):
+        # W-2: after a reboot into NEEDS_ADMIN the host is idle but
+        # DNS still points at Sphinx. Quitting then must warn that
+        # the machine stays pointed at an unserved resolver and
+        # require an explicit confirmation — never exit silently.
+        import sphinx_win.app.tray_app as tray_app
+
+        answers = []
+        asked = []
+
+        def fake_question(*a, **k):
+            asked.append(a)
+            return answers.pop(0)
+
+        monkeypatch.setattr(
+            tray_app.QMessageBox, "question", staticmethod(fake_question)
+        )
+        quit_calls = []
+        app, window, controller, manager, host = self.build_host(
+            tmp_path, quit_fn=lambda: quit_calls.append(True)
+        )
+        controller.start()  # engage, as the previous run did
+        controller.server.stop()
+        controller.running = False  # this host serves nothing
+        from sphinx_win.dnsmgmt.guard import DnsState
+
+        assert controller.dns_state() is DnsState.ENGAGED
+
+        answers.append(tray_app.QMessageBox.StandardButton.No)
+        assert host.quit() is False
+        assert quit_calls == []  # not confirmed: the host stays
+        assert len(asked) == 1
+        text = " ".join(str(part) for part in asked[0])
+        assert "still points at Sphinx" in text
+        assert "administrator" in text
+
+        answers.append(tray_app.QMessageBox.StandardButton.Yes)
+        assert host.quit() is True
+        assert quit_calls == [True]  # confirmed: the host may go
+        # Quitting changes no DNS settings (that needs elevation).
+        assert manager.get_dns("Wi-Fi", "IPv4") == ["127.0.0.1"]
+
+    def test_quit_while_disengaged_needs_no_confirmation(
+        self, tmp_path, monkeypatch
+    ):
+        import sphinx_win.app.tray_app as tray_app
+
+        def fail_question(*a, **k):  # pragma: no cover - must not run
+            raise AssertionError("no warning expected when disengaged")
+
+        monkeypatch.setattr(
+            tray_app.QMessageBox, "question", staticmethod(fail_question)
+        )
+        quit_calls = []
+        app, window, controller, manager, host = self.build_host(
+            tmp_path, quit_fn=lambda: quit_calls.append(True)
+        )
+        assert host.quit() is True
+        assert quit_calls == [True]
+
     def test_startup_resumes_an_existing_engagement(self, tmp_path):
         app, window, controller, manager, host = self.build_host(tmp_path)
         controller.start()  # engage, as the previous run did
