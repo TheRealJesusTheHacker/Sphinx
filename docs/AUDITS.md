@@ -8,6 +8,214 @@ never merely to make a report prettier).
 
 ---
 
+## Debian Phase 1 audit — daemon, engage/restore guard, .deb (2026-10-21)
+
+Scope: the Debian edition's Phase 1 as landed in a0d1a4c6 (the
+`debian/**` tree, its CI workflow, and — for the docs findings —
+the absence of any docs change in that commit), audited against
+FILTER-SPEC and the Windows audits' inherited gates, with the
+independently built alt implementation (`debian/` drop-in design)
+as comparison input only. The alt design was NOT merged; the
+landed mechanism was audited as it stands.
+
+Method: full read of the landed tree; the pytest suite as baseline
+(reproduced: 71 passed / 9 skipped — the skips are this sandbox's
+blocked UDP loopback, which CI covers); a real .deb built locally
+and its payload inspected file by file; the CI verdict for the
+landed HEAD read through the API (run 39561311032, success —
+suite, shellcheck, package build, payload listing); and targeted
+probes beyond the suite for the link-change and symlink-swap
+states below.
+
+### Fixed
+
+1. **MEDIUM — On the resolved stack, a moved default route read
+   as ENGAGED while the live route bypassed the filter.** The
+   engagement is a `resolvectl` override on the one link that
+   carried the default route at engage time, and state matching
+   checked only that link. Probe: engage on eth0, move the
+   default route to wlan0 (never pointed) — `detect_state()`
+   still returned ENGAGED, because eth0's override was intact.
+   Filtering was silently off for all live traffic while every
+   surface said on — the claim-of-protection failure the fleet's
+   honesty rules exist to prevent. Fix: the resolved state match
+   now also requires the recorded link to still be the default
+   link (when a default exists); a moved route reads LEFTOVER,
+   surfaced for the user's own re-engage decision. Regression
+   test added. *(resolver/guard.py, tests/test_guard.py)*
+2. **LOW — Restore would write over a resolv.conf that had become
+   a symlink after engagement.** The direct stack engages a
+   regular file (any symlink is refused at detection), but
+   `disengage` never re-checked: if the file had since become
+   another stack's symlink, the atomic write replaced the symlink
+   itself with a regular file, retired the record, and reported
+   success against a setup Sphinx no longer owned. Fix: restore
+   on the direct stack refuses when the file is now a symlink,
+   keeps the record, and says plainly to check the new setup and
+   dismiss. Regression test added. *(resolver/guard.py,
+   tests/test_guard.py)*
+3. **MEDIUM — Unprivileged `sphinx status` reported a running
+   daemon as not answering.** The control socket is mode 0660
+   (daemon user/group + root) inside a 0755 runtime directory —
+   the right security posture — but the CLI ran unprivileged by
+   design, so its stats request died with EACCES, ControlClient
+   collapsed that into the same "unreachable" as a dead daemon,
+   and status printed "Filter: not answering (the service is not
+   running)" in the same breath as "Service: running (systemd)".
+   Fix: ControlClient now distinguishes permission-denied from
+   unreachable, and status tells the truth in each case (running,
+   counters need `sudo sphinx status`; or running but not
+   answering its socket). The socket's permissions did not move.
+   Regression test added. *(control.py, cli.py,
+   tests/test_control.py)*
+4. **MEDIUM — prerm could trap a machine into an unremovable
+   package.** prerm ran `sphinx restore` unconditionally; on a
+   machine whose DNS pointed at *any* loopback resolver with no
+   Sphinx record (the guard's UNKNOWN state — e.g. a hand-run
+   local DNS server, Sphinx installed but never engaged),
+   restore correctly refuses (there is nothing Sphinx saved to
+   restore), prerm exited 1, and dpkg aborted every removal —
+   forever, with no path out short of reconfiguring DNS for an
+   unrelated tool's sake. Fix: prerm now runs the restore only
+   when a saved record file actually exists (the same gate its
+   missing-binary branch already used); with a record, the law
+   is unchanged — restore first, verified, or removal stops.
+   Test pin added. *(packaging/prerm, tests/test_packaging.py)*
+
+### Documented and ignored
+
+- **The mechanism choice itself (direct rewrite + resolvectl
+  runtime override) vs the alt drop-in design.** The direct path
+  is symlink-safe by refusal (any symlinked resolv.conf other
+  than resolved's stub pattern is refused; the write path is
+  unreachable for symlinks, and restore now double-checks —
+  finding 2). The resolved path's restore is `resolvectl
+  revert`, and that is precisely what keeps it clear of the
+  Windows Phase 1 HIGH: the record's `prior_servers` snapshot is
+  effective, DHCP-flavored state, but it is kept as *information*
+  (loopback-original refusal; the renewal note) and is never a
+  restore target — revert returns the link to its configured /
+  automatic state, so no lease address can be pinned. The
+  override's volatility (no survival across reboot / link bounce
+  / route change) is real, disclosed in debian/README.md, and
+  every post-volatility state reads honestly as a leftover after
+  finding 1's fix. Re-architecting to the drop-in mechanism is a
+  product decision for the release gate, not an audit fix; the
+  landed mechanism's promises, as documented, are the ones this
+  audit verified. FILTER-SPEC gained a "Debian edition notes"
+  section describing the landed mechanism, not the alt one.
+- **FILTER-SPEC parity gap (functional, phased, disclosed).**
+  The landed core has no store, no updater, and no profiles:
+  the daemon runs the bundled list with an empty allowlist, so
+  the installed edition cannot update its lists, cannot persist
+  allowlist/custom entries, and cannot switch profiles — all
+  core-spec capabilities the other editions have. debian/README.md's
+  Phase 1 section already states this plainly ("No list
+  updates yet… No profiles, no custom entries, no allowlist
+  editing"), and FILTER-SPEC's Debian notes now carry the same
+  phasing language. Recorded here as a MEDIUM functional gap,
+  not a defect of what was built: it is Phase 2's named content
+  (update path under the spec's HTTPS/gate/atomic/manual rules;
+  stores + CLI editing; profiles parity), and inventing it
+  inside an audit would be the re-architecture this audit was
+  told not to perform.
+- **Upgrade disengages.** prerm's restore also runs on upgrade,
+  so an upgrade puts the original settings back and turns
+  Sphinx off; postinst does not re-engage. Safe (never a broken
+  or half-pointed machine) and now documented in
+  debian/README.md; automatic re-engagement after upgrade is a
+  Phase 2 / release-gate decision alongside boot resumption.
+- **Hand-set `resolvectl` overrides are not restored.** Runtime
+  state nothing on the machine records; disclosed in the landed
+  README from the start. No honest promise exists to keep.
+- **The wire-proof fallback counts its exchange.** When the
+  control socket is unavailable, engage's loopback proof falls
+  back to a direct sinkhole query, which the engine counts and
+  logs as ordinary traffic (one query). The primary path (via
+  the control socket) is uncounted and unlogged as specified;
+  the fallback runs only when the daemon is up but its socket is
+  not — an already-degraded state. Noted; not worth a second
+  proof channel in Phase 1.
+- **/var/lib/sphinx is mode 0755.** The saved record is readable
+  by other local users. What it holds — the pre-engagement
+  resolv.conf bytes and per-link servers — was world-readable
+  resolver configuration before Sphinx engaged (resolv.conf is
+  0644; `resolvectl dns` is unprivileged), and unprivileged
+  status depends on reading the record to report state from real
+  reads. Proportionate; left as landed.
+
+### Verified clean (probed independently)
+
+- **Q: can the installed daemon find its list? Yes — verified,
+  not traced on paper only.** build-deb.sh copies the canonical
+  Android asset into the package at
+  /usr/share/sphinx/bundled-blocklist.txt with a byte-check
+  (`cmp`) at build time; that path is exactly paths.py's default
+  `SPHINX_LIST`. The built .deb's payload contains it
+  (2,189,536 bytes), the suite's packaging test extracts the .deb
+  and compares the shipped list byte-for-byte against the
+  canonical asset, and the parsed count is the pinned 71,491.
+  The "no copy forked into debian/" arrangement holds because
+  the copy is made by the package build from the one asset, and
+  the build fails loudly — never silently list-less — when the
+  asset is absent. Building from a debian/-only export is
+  therefore impossible by design, and says so.
+- **Inherited gates re-probed, all holding:** forwarding
+  validation (connected socket, source enforced by the kernel,
+  ID + QR match, one 3 s deadline bounding the whole wait,
+  fallback tried exactly once, truncated answers completed over
+  TCP against the same deadline); bounded concurrency (one
+  64-slot semaphore shared by all four listeners; refusals past
+  the cap are unanswered/closed, never queued); list handling
+  (the bundled list passes the ≥1,000-domain sanity gate at
+  daemon start or the daemon refuses to run); the query log
+  (in-memory 500-entry ring; nothing in daemon/control writes
+  query names anywhere — the journal receives lifecycle lines
+  only, and control stats expose counts, never names);
+  manual-update-only (there is no fetch code in the edition at
+  all — see the parity item above); status from real reads
+  (systemd's word, the record's, the resolver's, and — after
+  finding 3 — an honest account of what could not be read).
+- **Unit / capability model:** the service runs as the
+  dedicated `sphinx` system user (nologin, created by postinst)
+  with AmbientCapabilities=CAP_NET_BIND_SERVICE and a matching
+  CapabilityBoundingSet plus NoNewPrivileges — the standard
+  systemd pattern for an unprivileged low-port bind; the filter
+  never runs as root on any path (engage/restore run as root but
+  serve no DNS). The control socket is not world-accessible
+  (0660; runtime dir 0755). postinst changes no DNS and starts
+  nothing; purge (not remove) deletes the state and the user.
+- **Docs gap closed in this audit:** FILTER-SPEC "Debian edition
+  notes" (landed mechanism, phasing, deviations), ROADMAP Debian
+  Phase 1 record + Phase 2 contents, the root README's Editions
+  line (was "Planned — not started"), and debian/README.md notes
+  for route/link volatility, unprivileged status, and the
+  record-gated prerm / upgrade behavior.
+
+### Verification ceiling, stated plainly
+
+As with every edition: the guard is proven on fakes, the package
+in a build VM and CI, the daemon on loopback sockets. No real
+Debian machine's DNS has been engaged by this code. The
+real-machine pass — engage → reboot, DHCP renewal and route
+change mid-engagement, install → engage → remove on Debian and
+Kali/Parrot — is release-gate work, owed before this edition is
+called done.
+
+### Verdict
+
+The landed Debian Phase 1 is a sound, honest core — the restore
+discipline survived contact with two different resolver stacks,
+and its restore on the resolved stack is exact in the way the
+fleet's doctrine actually demands (back to configured/automatic,
+never a pinned snapshot). The four fixes above were all in the
+state-*reporting* and lifecycle edges, not in the discipline
+itself. With the parity gap named as Phase 2's content, the
+edition is ready for Phase 2 (updater + stores + profiles) and
+then its release gate alongside the other editions.
+
+---
+
 ## Windows Phase 3 audit — profiles parity and the palette HUD (2026-10-21)
 
 Scope: the Windows edition's Phase 3 (commits ae2535c3..c9ea4f0d):

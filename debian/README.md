@@ -43,7 +43,12 @@ Phase 1 is **not** the finished product:
   waiting, and you choose: `sudo sphinx engage` turns it back on
   against the saved settings, `sudo sphinx restore` puts the saved
   settings back. Nothing is ever re-pointed or restored behind
-  your back.
+  your back. The same honesty applies to change on a live machine:
+  the resolved override is runtime state on the one link that
+  carried the default route when you engaged — a reboot, a link
+  bounce, or the default route moving to another connection ends
+  it, and `sphinx status` then shows the saved record waiting
+  (a leftover), never a false "on."
 
 ## The honest limit
 
@@ -118,6 +123,12 @@ Turning a machine's DNS over to anything is a trust exercise, so
   a runtime override on your connection (`resolvectl dns`), and
   restore removes it (`resolvectl revert`), which returns the
   connection to exactly what its configuration and DHCP provide.
+  The override lives on the connection that carried the default
+  route when you engaged. If the machine's route later moves to a
+  different connection (say, Ethernet unplugged and Wi-Fi takes
+  over), that connection was never pointed at Sphinx — status
+  shows a leftover rather than pretend the new route is filtered,
+  and `sudo sphinx engage` on the new connection is the fix.
   Two things about this, stated plainly:
   - Sphinx never binds 127.0.0.53 and never touches the stub file:
     that address and file are resolved's own. There is no port
@@ -151,6 +162,12 @@ anywhere), and its counters live in memory too. The command talks
 to the daemon through a control socket in `/run/sphinx/` to prove
 liveness and read the real counters — `sphinx status` reports what
 the daemon itself says, and says "not answering" when it isn't.
+The socket is deliberately not open to every local user (mode
+0660, the daemon's user/group and root), so an unprivileged
+`sphinx status` shows the service and resolver state from real
+reads and says the counters need `sudo sphinx status` — it never
+reports a running daemon as stopped just because it may not read
+its counters.
 
 While the filter runs, it counts questions blocked and let
 through. Allowed questions are forwarded unchanged to the upstream
@@ -172,7 +189,14 @@ A plain remove leaves `/var/lib/sphinx` (the saved record and the
 recorded on/off decision) in place, so a reinstall picks up where
 it left off; purge deletes it. Your `/etc/sphinx/sphinx.conf`
 edits are a conffile: kept on remove, removed on purge, by dpkg's
-usual rules.
+usual rules. Two removal details, stated plainly: the pre-removal
+restore runs only when a saved record actually exists (a machine
+Sphinx never engaged has nothing of Sphinx's to restore, and an
+unrelated resolver on this machine — a hand-run local DNS server,
+say — never traps the package into being unremovable); and an
+**upgrade runs the same restore**, so upgrading the package turns
+Sphinx off and puts your saved settings back — run
+`sudo sphinx engage` after an upgrade to turn it on again.
 
 ## Layout
 

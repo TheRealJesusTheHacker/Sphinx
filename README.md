@@ -135,13 +135,19 @@ the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md
    (core filter service; tray host, start-at-sign-in, installer;
    profiles and the Sphinx palette) have landed; see
    [windows/README.md](windows/README.md).*
-3. **Debian/Linux** — a local DNS-filter daemon (systemd service),
-   shipped as a .deb. *Planned — not started.*
+3. **Debian/Linux** — a local DNS-filter daemon (systemd service)
+   listening on loopback, shipped as a .deb, with engage/restore
+   commands under the same restore discipline (a plain
+   /etc/resolv.conf rewritten byte-exactly-restorable, or a
+   systemd-resolved runtime override restored by revert — never a
+   pinned DHCP lease). *Phase 1 landed (daemon, guard, CLI, .deb);
+   list updates, rule stores, and profiles are Phase 2 — see
+   [debian/README.md](debian/README.md).*
 4. Further platforms as feasible after those three.
 
-The Android and Windows editions exist today; neither is a finished
-release yet. The others are named here so the plan is public and
-honest — not because they're ready.
+All three editions exist today; none is a finished release yet.
+The others are named here so the plan is public and honest — not
+because they're ready.
 
 ## Status
 
@@ -174,8 +180,3 @@ Requires JDK 17 and the Android SDK (platform 34, build-tools 34).
 
 Built by **Sentinel Safeguard LLC** — Kansas City, Missouri.
 Security for everyone.
-
-## License
-
-Sphinx is released under the [MIT License](LICENSE) — anyone can use
-it as they wish.

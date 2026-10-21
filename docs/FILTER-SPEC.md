@@ -325,6 +325,82 @@ The Windows edition engages by configuration, not by tunnel:
   record is removed only by a verified restore — never by the
   uninstaller reaching into the data folder.
 
+## Debian edition notes
+
+The Debian edition engages by resolver configuration, in two
+stack-specific forms — the mechanism differs from the alt drop-in
+design that was considered and not landed; what follows describes
+the implementation as landed and audited (2026-10-21):
+
+- The daemon (a systemd service, dedicated `sphinx` user, ambient
+  CAP_NET_BIND_SERVICE only) listens on loopback — 127.0.0.1 and
+  ::1, UDP and TCP, port 53. It never binds 127.0.0.53 (the
+  systemd-resolved stub's own address) and never forwards upstream
+  to a loopback address (a loopback upstream is a config error
+  that stops the daemon, plainly).
+- Two stacks are engageable in Phase 1; everything else is a
+  protected refusal (NetworkManager-managed, resolvconf/dhcpcd-
+  generated, unrecognized, or any symlinked resolv.conf other than
+  the resolved stub pattern):
+  - **Direct** — a plain, regular-file `/etc/resolv.conf`.
+    Engagement rewrites it keeping every non-nameserver line; the
+    record holds the file's exact previous bytes (base64 +
+    SHA-256), and restore puts those bytes back and verifies them
+    byte-for-byte. A symlinked file is never written: stack
+    detection refuses it up front, and restore refuses again if
+    the file became a symlink after engagement.
+  - **systemd-resolved (standard stub setup)** — engagement is a
+    `resolvectl dns <default-link>` runtime override; restore is
+    `resolvectl revert <link>`. The record holds the link name and
+    the per-link servers seen at engage time **as information
+    only** — restore never re-applies them. That distinction is
+    the configured-not-effective rule in this stack's clothing:
+    those servers are largely DHCP lease state, and reverting
+    returns the link to exactly what its configuration and DHCP
+    provide, so a restore can never pin a lease address as static
+    configuration. A hand-set `resolvectl` override from before
+    engagement is runtime-only state nothing records; it is
+    replaced while Sphinx is on and is not promised back (stated
+    in debian/README.md).
+- The runtime override is volatile by design: it does not survive
+  a reboot, a link down/up, or a link reconfiguration, and the
+  engagement lives on the link that carried the default route at
+  engage time — if the default route moves to another link, that
+  link was never pointed, and the state reads as a **leftover**
+  (the audit's link-change rule), never as engaged. State is
+  always computed from real reads at the moment of asking; no
+  Sphinx surface continuously asserts protection between reads.
+- The save/verify discipline is the fleet's, unchanged: originals
+  recorded and read back **before** any change, an existing record
+  never overwritten, a loopback never recorded as an original (in
+  either stack), proof per family before pointing (and a
+  through-the-stub proof after pointing on the resolved stack),
+  every change verified by reading back, restore verified before
+  the record is retired, leftovers and unrecorded-loopback states
+  surfaced as their own states, never silently handled.
+- The daemon owns no resolver state: engage/restore/dismiss are
+  the CLI's, as root, through the one guard — one owner for the
+  record, as on Windows. The daemon's query log is memory-only
+  (500-entry ring); the journal receives lifecycle lines only —
+  never query names. The control socket (/run/sphinx/control.sock)
+  is mode 0660 for the daemon's user/group and root: unprivileged
+  `sphinx status` shows the real service/resolver state and says
+  plainly that the counters need `sudo sphinx status`.
+- **Phase 1 parity scope, stated plainly:** no list updates, no
+  allowlist/custom-entry stores, no profiles — the bundled list
+  (the canonical Android asset, copied byte-checked into the .deb
+  at /usr/share/sphinx/bundled-blocklist.txt) is the blocklist,
+  and the daemon's allowlist is empty. The spec's update rules
+  (HTTPS-only, ≥1,000-domain gate, atomic swap, manual only) and
+  its stores are Phase 2 work; nothing in Phase 1 fetches anything.
+- Removal keeps the Windows installer law in dpkg form: prerm
+  restores first — gated on a saved record actually existing —
+  and aborts the removal when a restore cannot be verified. A
+  plain remove leaves /var/lib/sphinx in place; purge deletes it
+  and the service user. An upgrade runs the same restore (the
+  record's originals are put back), so upgrading turns Sphinx
+  off; re-engage after an upgrade.
+
 ## Honesty rules baked into the design
 
 - Ads served from the same domain as requested content (YouTube /

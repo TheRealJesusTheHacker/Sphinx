@@ -360,6 +360,55 @@ Starts after the Windows edition lands.
 - Shipped as a .deb, with the service disabled until the user enables
   it — installing the package never changes DNS silently.
 
+### Debian Phase 1 — Core daemon, engage/restore guard, .deb (landed)
+
+- **The brain, in Python** (`debian/src/sphinx_deb/core/`): the
+  shared FILTER-SPEC core — parser rails, suffix matching with
+  allowlist-wins, sinkhole, forwarding discipline (connected
+  socket, ID + QR validation, one 3 s deadline per resolver,
+  single fallback, truncated answers completed over TCP), the
+  64-slot bounded-concurrency cap, and the memory-only 500-entry
+  query log. The bundled list is the identical canonical asset,
+  parsing to the identical **71,491** domains.
+- **Engagement, two stacks** (FILTER-SPEC, "Debian edition
+  notes"): a plain regular-file `/etc/resolv.conf` is rewritten
+  byte-exactly-restorable; systemd-resolved in stub setup is
+  engaged by a `resolvectl` runtime override restored by
+  `resolvectl revert` — the recorded per-link servers are
+  information only, never a restore target, so no DHCP lease is
+  ever pinned. NetworkManager / generated / unrecognized setups
+  are protected refusals. The full fleet discipline holds:
+  save + read-back-verify before change, never overwrite a
+  record, never record a loopback as an original, proof per
+  family before pointing, verified restore before the record
+  retires, leftover/unknown as surfaced states.
+- **The .deb:** dedicated `sphinx` system user, ambient
+  CAP_NET_BIND_SERVICE (the daemon never runs as root), hardened
+  unit, postinst that changes no DNS and starts nothing, prerm
+  that restores before removal and aborts on an unverified
+  restore, remove-keeps-data / purge-deletes discipline. The
+  package build copies the canonical list byte-checked into
+  /usr/share/sphinx/ — the exact path the installed daemon reads.
+- **Phase 1 scope, stated plainly:** CLI only; bundled-list only
+  (no list updates, no allowlist/custom stores, no profiles);
+  boot behavior is deliberate non-resumption on the resolved
+  stack (a reboot leaves a leftover record for the user's own
+  engage/restore decision).
+- **Independent audit (2026-10-21):** three mediums and three
+  lows found and fixed or documented — a moved default route
+  silently reading as engaged on the resolved stack; restore
+  writing over a resolv.conf that had become a symlink;
+  unprivileged status misreporting a running daemon's counters;
+  a prerm trap that could block removal when no Sphinx record
+  existed — full record in docs/AUDITS.md. CI run for the landed
+  HEAD was green (suite + package build).
+- **Phase 2 owes:** the list-update path under the spec's update
+  rules, allowlist/custom-entry stores with CLI editing, profiles
+  parity, and a decision on boot/route-change resumption for the
+  resolved stack. Real-machine proofs (engage → reboot, DHCP
+  renewal mid-engagement, route change, install/remove cycle on
+  Debian + Kali/Parrot) remain release-gate work.
+
 ## Further platforms
 
 As feasible after the three editions above, and only where the same
