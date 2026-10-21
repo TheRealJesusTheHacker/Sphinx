@@ -1,8 +1,9 @@
 """The headless --restore-dns mode (app/main.py): the installer's
 uninstall hook. It must restore exactly what the guard holds, keep
 the record when a restore fails, and treat "nothing held" as
-success."""
-from sphinx_win.app.main import restore_dns_main
+success. Plus the single-instance acquisition (same module): the
+probe→claim race must not produce a rival host."""
+from sphinx_win.app.main import acquire_instance, restore_dns_main
 from sphinx_win.dnsmgmt.base import AdapterDns
 from sphinx_win.dnsmgmt.fake import FakeDnsManager
 from sphinx_win.dnsmgmt.guard import DnsGuard
@@ -58,3 +59,40 @@ def test_unelevated_restore_changes_nothing(tmp_path):
     )
     assert code == 3
     assert manager.get_dns("Wi-Fi", "IPv4") == ["127.0.0.1"]
+
+
+class TestAcquireInstance:
+    """The one-host-per-user claim (Windows Phase 2 audit): two
+    launches in the same instant can both probe before either
+    claims the channel. The loser of the claim must re-probe and
+    become a "show" — never a rival host."""
+
+    def test_free_channel_becomes_the_host(self):
+        server = object()
+        role, got = acquire_instance(
+            lambda: False, lambda: server, sleep=lambda s: None
+        )
+        assert role == "host" and got is server
+
+    def test_a_running_host_turns_this_launch_into_a_show(self):
+        listens = []
+        role, got = acquire_instance(
+            lambda: True,
+            lambda: listens.append(True) or object(),
+            sleep=lambda s: None,
+        )
+        assert role == "show" and got is None
+        assert listens == []  # never even tried to claim
+
+    def test_losing_the_claim_race_reprobes_and_shows(self):
+        probes = iter([False, True])  # free at first, host by retry
+        role, got = acquire_instance(
+            lambda: next(probes), lambda: None, sleep=lambda s: None
+        )
+        assert role == "show" and got is None
+
+    def test_a_channel_that_never_opens_runs_solo(self):
+        role, got = acquire_instance(
+            lambda: False, lambda: None, attempts=3, sleep=lambda s: None
+        )
+        assert role == "solo" and got is None

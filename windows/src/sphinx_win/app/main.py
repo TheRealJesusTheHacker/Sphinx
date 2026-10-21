@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 # Absolute imports throughout this module, deliberately: PyInstaller
@@ -89,6 +90,40 @@ def restore_dns_main(data_dir=None, manager_factory=None, out=print) -> int:
     return 0 if result.ok else 3
 
 
+def acquire_instance(probe_connect, try_listen, *, attempts=3,
+                     pause_s=0.2, sleep=time.sleep):
+    """Decide this launch's role in the one-host-per-user rule.
+
+    ``probe_connect()`` asks the running host (if any) to show its
+    window and returns True when one answered; ``try_listen()``
+    claims the channel and returns the server, or None when the
+    claim failed. Returns ("show", None) when a host already owns
+    the machine, ("host", server) when this launch claimed the
+    channel, and ("solo", None) when the channel could not be
+    claimed or held — the caller then proceeds without the
+    single-instance net, best effort as before.
+
+    Probing and claiming are two steps, so two launches in the
+    same instant can both probe before either claims — and the
+    loser of the claim would run on as a rival host, a second
+    owner of the machine's DNS state. A failed claim is therefore
+    followed by fresh probes before the net is given up: by then
+    the winner is listening, the probe reaches it, and this
+    launch becomes a "show" instead of a rival (Windows Phase 2
+    audit).
+    """
+    for _ in range(attempts):
+        if probe_connect():
+            return "show", None
+        server = try_listen()
+        if server is not None:
+            return "host", server
+        sleep(pause_s)
+    if probe_connect():
+        return "show", None
+    return "solo", None
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     launch = parse_launch_args(argv)
@@ -112,18 +147,26 @@ def main(argv=None) -> int:
     # host's window and exits — two hosts would fight over one DNS
     # state, and the state has exactly one owner by design.
     name = instance_name()
-    probe = QLocalSocket()
-    probe.connectToServer(name)
-    if probe.waitForConnected(500):
+
+    def probe_connect() -> bool:
+        probe = QLocalSocket()
+        probe.connectToServer(name)
+        if not probe.waitForConnected(500):
+            return False
         probe.write(b"show")
         probe.flush()
         probe.waitForBytesWritten(500)
         probe.disconnectFromServer()
+        return True
+
+    def try_listen():
+        candidate = QLocalServer()
+        QLocalServer.removeServer(name)  # clear a crashed host's leftover
+        return candidate if candidate.listen(name) else None
+
+    role, server = acquire_instance(probe_connect, try_listen)
+    if role == "show":
         return 0
-    server = QLocalServer()
-    QLocalServer.removeServer(name)  # clear a crashed host's leftover
-    if not server.listen(name):
-        server = None  # best effort: run without the single-instance net
 
     def release_instance():
         if server is not None:
