@@ -1,0 +1,4 @@
+# Runtime (the app window). The filter core, DNS server, and DNS
+# management are pure standard library — PySide6 is the only runtime
+# dependency, and only the app shell imports it.
+PySide6>=6.6
