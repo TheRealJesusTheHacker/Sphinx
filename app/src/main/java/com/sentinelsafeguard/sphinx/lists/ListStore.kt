@@ -175,14 +175,14 @@ class ListStore(context: Context) {
         }
     }
 
-    fun saveAllowlist(entries: Collection<String>) {
+    fun saveAllowlist(entries: Collection<String>, syncProfile: Boolean = true) {
         // Entry validation, not mere normalization: an entry the
         // loader would drop (single label, reserved name) must not be
         // stored as if it were in force.
         val normalized = entries.mapNotNull { Blocklist.normalizeEntry(it) }.toSortedSet()
         val text = normalized.joinToString("\n", postfix = "\n")
         writeAtomically(allowlistFile, text.toByteArray(Charsets.UTF_8))
-        syncActiveProfile()
+        if (syncProfile) syncActiveProfile()
     }
 
     // --- Custom block entries (Phase 3) -------------------------------------
@@ -205,11 +205,11 @@ class ListStore(context: Context) {
     /** The user's custom block entries, normalized and sorted. */
     fun customBlockEntries(): List<String> = customBlockDomainSet().sorted()
 
-    fun saveCustomBlockEntries(entries: Collection<String>) {
+    fun saveCustomBlockEntries(entries: Collection<String>, syncProfile: Boolean = true) {
         val normalized = entries.mapNotNull { Blocklist.normalizeEntry(it) }.toSortedSet()
         val text = normalized.joinToString("\n", postfix = "\n")
         writeAtomically(customBlockFile, text.toByteArray(Charsets.UTF_8))
-        syncActiveProfile()
+        if (syncProfile) syncActiveProfile()
     }
 
     // --- App rules (Phase 3) --------------------------------------------------
@@ -221,10 +221,10 @@ class ListStore(context: Context) {
         return appRulesFile.bufferedReader().useLines { lines -> AppRules.parse(lines) }
     }
 
-    fun saveAppRules(rules: AppRules) {
+    fun saveAppRules(rules: AppRules, syncProfile: Boolean = true) {
         val text = rules.serializeLines().joinToString("\n", postfix = "\n")
         writeAtomically(appRulesFile, text.toByteArray(Charsets.UTF_8))
-        syncActiveProfile()
+        if (syncProfile) syncActiveProfile()
     }
 
     // --- Query log setting --------------------------------------------------
@@ -292,21 +292,26 @@ class ListStore(context: Context) {
      * modified, by a switch. Returns false when no such profile
      * exists; the live state is then untouched.
      *
+     * The live writes deliberately do NOT run the write-through
+     * sync: a switch is not an edit, and if a sync fired here it
+     * would write the incoming state into the *outgoing* profile's
+     * snapshot on disk — where a process death mid-switch would
+     * leave it, the outgoing profile silently replaced by the
+     * incoming one (Phase 4 audit finding). With the sync off, the
+     * profiles file is untouched until the marker save below, which
+     * is computed from a fresh read of that untouched file: a death
+     * at any point leaves every snapshot intact, the marker where
+     * it was, and at most a prefix of the target state live — the
+     * user just switches again.
+     *
      * The caller restarts the filter (ACTION_RESTART) afterwards —
      * the audited path — so the new state runs on exactly the
      * lifecycle a stop and start would have produced.
      */
     fun switchProfile(name: String): Boolean {
-        val set = loadProfileSet()
-        val profile = set.profile(name) ?: return false
+        val profile = loadProfileSet().profile(name) ?: return false
         writeLiveState(profile.state)
-        // Saved after the live writes: the save* calls above run the
-        // write-through sync, which reads the profile file — saving
-        // the new active marker last keeps every intermediate state
-        // on disk consistent (a sync during the writes targets the
-        // previously active profile with the state being replaced,
-        // which this save then supersedes).
-        saveProfileSet(set.withActive(profile.name))
+        saveProfileSet(loadProfileSet().withActive(profile.name))
         return true
     }
 
@@ -323,11 +328,13 @@ class ListStore(context: Context) {
         return true
     }
 
-    /** Write a profile snapshot into the three live stores. */
+    /** Write a profile snapshot into the three live stores, without
+     *  the write-through sync — see [switchProfile] for why a switch
+     *  must never let an edit-path sync fire. */
     private fun writeLiveState(state: RuleState) {
-        saveAppRules(state.appRules)
-        saveAllowlist(state.allowlistEntries)
-        saveCustomBlockEntries(state.customBlockEntries)
+        saveAppRules(state.appRules, syncProfile = false)
+        saveAllowlist(state.allowlistEntries, syncProfile = false)
+        saveCustomBlockEntries(state.customBlockEntries, syncProfile = false)
     }
 
     /**
