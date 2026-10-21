@@ -24,6 +24,29 @@ resolver and the answer comes right back.
   and browsers alike — not just one browser.
 - **Free.** No accounts, no subscription, no ads of our own.
 
+## Your lists, your log — the privacy facts
+
+- **A real blocklist, built in.** Sphinx ships with the StevenBlack
+  unified list (ads + malware) — **71,491 domains** — so it protects
+  you from the first minute, before any update.
+- **Updates only when you tap.** "Update lists now" downloads fresh
+  lists over HTTPS from the sources shown in the app (defaults:
+  StevenBlack and HaGeZi Multi LIGHT). You can see and edit those
+  addresses. Sphinx contacts nothing else on its own behalf — the only
+  other traffic is your own allowed lookups going to the public
+  resolver, as they would without Sphinx. A download that fails or
+  doesn't parse as a real list changes **nothing**: your working list
+  is never wiped by a bad download.
+- **An allowlist that always wins.** If a site or app breaks, add its
+  domain to the allowlist in the app and it will never be blocked,
+  even when a list covers it.
+- **A query log that stays on the phone.** So you can see Sphinx
+  working, it keeps the most recent 500 lookups — the name, whether it
+  was blocked, and the time — **in memory only**. The log is never
+  written to permanent storage, never sent anywhere, and disappears
+  when the app's process stops. Recording is **on by default**; you
+  can turn it off, or clear the log, any time in the app.
+
 ## What Sphinx cannot do — stated plainly
 
 - **It cannot remove ads that are served from the same address as the
@@ -34,8 +57,9 @@ resolver and the answer comes right back.
 - **It does not inspect your traffic.** Sphinx reads DNS requests —
   the names being looked up — and nothing else. It does not open,
   decrypt, or read the contents of your HTTPS connections.
-- **Phase 1 filters IPv4 DNS.** IPv6 filtering is on the roadmap; on an
-  IPv6-only path, lookups can pass around the filter today.
+- **The Android edition currently filters IPv4 DNS.** IPv6 filtering is
+  on the roadmap; on an IPv6-only path, lookups can pass around the
+  filter today.
 - **Apps with built-in encrypted DNS can walk around it.** Some apps
   and browsers do their own encrypted lookups (DNS-over-HTTPS —
   Chrome calls it "secure DNS") and never ask the phone's resolver,
@@ -62,12 +86,15 @@ plan is public and honest — not because they're ready.
 
 ## Status
 
-This is **Phase 1: a working core, not a finished product.** The DNS
-filter runs, with a small starter blocklist baked in. The blocklist
-engine, per-app rules, and a polished release build are on the
-[roadmap](docs/ROADMAP.md). Nothing here is a finished public release
-yet — under Sentinel's standing rule, no release ships before it passes
-an independent audit.
+This is **Phase 2: a working filter with a real blocklist engine, not
+a finished product.** The DNS filter runs on a bundled 71,491-domain
+list, updates itself from public list sources when you tap the button
+(with a sanity check and an atomic swap, so a bad download can never
+wipe your protection), honors your allowlist, and keeps a short
+on-device query log. Per-app rules and a polished release build are
+still on the [roadmap](docs/ROADMAP.md). Nothing here is a finished
+public release yet — under Sentinel's standing rule, no release ships
+before it passes an independent audit.
 
 ## Building
 

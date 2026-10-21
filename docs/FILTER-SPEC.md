@@ -25,9 +25,36 @@ contents of any connection (no HTTPS interception, ever).
    - Entry `ads.example.com` blocks `ads.example.com` and below, but
      **not** `example.com` itself and not `other.example.com`.
 4. If nothing matches, the query is **allowed**.
-5. (Phase 2) An allowlist, when present, wins over the blocklist at the
-   same or deeper level: allowlisting `example.com` unblocks it and all
-   its subdomains even if a broader entry blocks them.
+5. An allowlist, when present, wins over the blocklist at the same or
+   deeper level: allowlisting `example.com` unblocks it and all its
+   subdomains even if a broader entry blocks them. The allowlist uses
+   the same matching walk as the blocklist (rule 3): a name is covered
+   when it, or any parent of it, is allowlisted.
+
+## List files
+
+Blocklists and allowlists are plain-text files, parsed by these rules:
+
+- **Plain format:** one domain per line. A leading `*.` (wildcard
+  style, as some published lists use) means the same as the bare name.
+- **Hosts format:** an IP literal (IPv4 or IPv6) followed by one or
+  more names; every name on the line is an entry.
+- Blank lines and comments are ignored: `#` starts a comment anywhere
+  on a line.
+- Entries are normalized by the matching rules above. Anything that
+  doesn't normalize to a domain name is skipped.
+
+Safety rails while parsing:
+
+- **Reserved local names are never entries** — `localhost` and the
+  other names hosts files use for the machine itself
+  (`localhost.localdomain`, `broadcasthost`, the `ip6-*` names) are
+  infrastructure, not ad servers.
+- **Single-label entries are ignored.** A one-word entry (`com`)
+  would, by the subdomain rule, block an entire top-level domain. No
+  legitimate blocklist needs one.
+- **IP literals are never entries.** An address by itself is not a
+  name.
 
 ## Sinkhole behavior (blocked queries)
 
@@ -56,10 +83,44 @@ A blocked query is answered locally and never leaves the device:
 - Upstream traffic must never be routed back into the filter itself
   (on Android: the forwarding socket is protected from the VPN).
 
-## Counting
+## List updates
+
+Editions may refresh their blocklists from remote sources, under
+these rules:
+
+- Sources are **HTTPS only**, and they are **visible and editable** by
+  the user. An edition fetches only from the sources it shows, and
+  only when the user asks (no silent background fetching).
+- A download is **fully parsed and sanity-checked before it may
+  replace anything**: the parsed list must hold at least **1,000
+  domains**. An error page, a truncated file, or an empty response
+  never passes — real blocklists hold tens of thousands.
+- The swap is **atomic from the filter's point of view**: the combined
+  replacement set (fresh downloads plus any kept previous copies) must
+  pass the same sanity gate before any stored list changes, each
+  stored file is replaced by temp-file-and-rename, and the running
+  filter switches to the new lists only once they are complete. A
+  failed update changes nothing.
+- A source that fails keeps its **previous downloaded copy**.
+- A **bundled list** ships with the app and is never modified by
+  updates. Downloaded lists, when valid, take over from it; if no
+  valid downloaded list exists, the bundled list is the blocklist.
+
+## Counting and the query log
 
 Each edition counts queries it **blocked** and queries it **allowed**
 (forwarded). Counts are informational only and live on the device.
+
+An edition may also keep a **query log** — recent query names, whether
+each was blocked, and when. The log:
+
+- lives **only on the device, in memory** — it is never written to
+  disk by the filter and never transmitted anywhere;
+- is a **ring buffer with a hard cap** (500 entries in the Android
+  edition), so it cannot grow without bound;
+- is **on by default** in the Android edition, stated plainly in the
+  README, and the user can turn recording **off** or **clear** the log
+  at any time.
 
 ## Honesty rules baked into the design
 

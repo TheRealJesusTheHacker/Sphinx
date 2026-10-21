@@ -45,18 +45,47 @@ Traffic never leaves the phone.
 Known Phase 1 limits (stated in the README too): IPv4 only; counters
 reset when the service stops; the starter list is small and static.
 
-### Android Phase 2 — Blocklist engine
+### Android Phase 2 — Blocklist engine (landed)
 
-- Multiple bundled starter lists (ads, trackers, telemetry).
-- Remote list updates: fetch, verify, and atomically swap list files.
-- User allowlist (never block these names) and custom entries.
-- Query log: what was asked, what was blocked, when — viewable and
-  clearable in the app, stored only on the phone.
+- **A substantial bundled list** replaces the Phase 1 starter:
+  the StevenBlack unified hosts file (ads + malware), **71,491
+  domains** as one bundled asset. (The plan said "multiple bundled
+  starter lists"; one large curated list plus two remote sources
+  turned out to be the same coverage with less to go stale.)
+- **Remote list updates:** HTTPS fetch from user-visible,
+  user-editable sources — defaults are StevenBlack (hosts format)
+  and HaGeZi Multi LIGHT (wildcard/plain format); the parser handles
+  both shapes, plus IPv6 hosts lines. Every download is parsed and
+  sanity-checked (≥1,000 domains) and the combined set must pass the
+  same gate before anything on disk changes; each file swaps in by
+  temp-file-and-rename, a failed source keeps its previous copy, and
+  a failed update changes nothing. The running filter switches to
+  the new lists only once they are complete. Manual "Update lists
+  now" only — no background fetching. Last-updated time and the
+  active domain count are shown in the app.
+- **User allowlist** (never block these names): editable in the app,
+  persisted on the phone, wins over the blocklist per FILTER-SPEC
+  rule 5. *Custom block entries* (the other half of the original
+  Phase 2 line) move to Phase 3, alongside per-app rules — the
+  allowlist covers Phase 2's "a site broke, unblock it" need.
+- **Query log:** what was asked, blocked or allowed, when — a
+  500-entry ring buffer held **in memory only**, viewable and
+  clearable in the app, never written to disk, never transmitted.
+  Recording is on by default (stated in the README) with an off
+  switch in the app.
+
+Measured on the build machine's JVM (kotlinc + JUnit harness):
+parsing the bundled 71,491-domain list takes ~1.5 s cold and under a
+second warm; the parsed set retains ~9 MB of heap; matching runs at
+roughly 150k lookups/second warm. Sane for a phone; the numbers are
+reproduced by the bundled-list test in the suite.
 
 ### Android Phase 3 — Firewall rules
 
 - Per-app rules: block an app's network access entirely, or exempt an
   app from filtering.
+- Custom block entries: user-added domains on the block side — the
+  counterpart of the Phase 2 allowlist (moved here from Phase 2).
 - Connection log beyond DNS: destinations by app, with plain-language
   summaries.
 - Optional IPv6 DNS filtering.
