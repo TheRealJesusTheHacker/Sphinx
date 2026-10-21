@@ -156,9 +156,15 @@ class DnsGuard:
             return DnsState.LEFTOVER
         current = self._manager.active_adapters()
         pointed = [a for a in current if self._at_loopback(a)]
-        if pointed and len(pointed) == len(current):
-            # Loopback everywhere and no record of the originals:
-            # Sphinx will not guess at settings it never saved.
+        if pointed:
+            # ANY active adapter at its family loopback, with no
+            # record of the originals, is UNKNOWN — not just the
+            # all-loopback case (Sweep #3, W-3). A partial-loopback
+            # machine has DNS on that adapter pointing at a
+            # possibly-dead loopback resolver; calling it
+            # DISENGAGED ("Sphinx is off") understates a broken-DNS
+            # machine. Sphinx will not guess at settings it never
+            # saved, on any adapter.
             return DnsState.UNKNOWN
         return DnsState.DISENGAGED
 

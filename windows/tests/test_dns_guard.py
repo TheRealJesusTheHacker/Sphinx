@@ -132,6 +132,25 @@ class TestUnknownState:
         assert not result.ok  # never records loopback as an "original"
         assert guard.load_backup() is None
 
+    def test_partial_loopback_without_backup_is_unknown(self, tmp_path):
+        # W-3: ANY active adapter exactly at its family loopback,
+        # with no backup, is UNKNOWN — one adapter pointing at a
+        # possibly-dead loopback resolver is not "Sphinx is off".
+        adapters = [
+            AdapterDns("Wi-Fi", "IPv4", ["127.0.0.1"]),
+            AdapterDns("Wi-Fi", "IPv6", ["fe80::1"]),
+            AdapterDns("Ethernet", "IPv4", ["192.168.1.1"]),
+            AdapterDns("Ethernet", "IPv6", []),
+        ]
+        guard, _ = make_guard(tmp_path, adapters=adapters)
+        assert guard.detect_state() is DnsState.UNKNOWN
+
+    def test_no_loopback_without_backup_is_disengaged(self, tmp_path):
+        # The clean case stays DISENGAGED: no backup, and no active
+        # adapter at its family loopback.
+        guard, _ = make_guard(tmp_path)
+        assert guard.detect_state() is DnsState.DISENGAGED
+
 
 class TestPartialLoopbackRefusal:
     """Windows audit (Phase 1): the all-loopback refusal used to be
