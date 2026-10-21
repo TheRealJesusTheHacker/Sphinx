@@ -13,4 +13,35 @@
     <string name="notification_title">Sphinx is on</string>
     <string name="notification_text">Questioning DNS requests on this device.</string>
     <string name="notification_stop">Turn off</string>
+
+    <!-- Block lists (Phase 2) -->
+    <string name="section_lists">Block lists</string>
+    <string name="list_status_bundled">Using the list built into the app: %1$s domains.</string>
+    <string name="list_status_downloaded">Using downloaded lists: %1$s domains. Last updated %2$s.</string>
+    <string name="button_update_lists">Update lists now</string>
+    <string name="update_running">Updating…</string>
+    <string name="update_success">Lists updated — now questioning with %1$s domains.</string>
+    <string name="update_failed">That update didn\'t take, so your current list is unchanged. Check the connection and the source addresses, then try again.</string>
+    <string name="sources_label">List sources — the web addresses Sphinx downloads lists from, one per line. These are the only addresses Sphinx contacts on its own, and only when you tap Update.</string>
+    <string name="button_save_sources">Save sources</string>
+    <string name="sources_saved">Sources saved.</string>
+    <string name="sources_none_valid">None of those addresses can be used — sources must start with https://.</string>
+    <string name="sources_some_invalid">Some addresses were skipped — sources must start with https://.</string>
+
+    <!-- Allowlist (Phase 2) -->
+    <string name="section_allowlist">Allowlist — never blocked</string>
+    <string name="allowlist_explainer">If a site or app breaks, allowlist its domain here. The domain and everything under it will always be let through, even when a block list covers it.</string>
+    <string name="allowlist_empty">Nothing allowlisted yet.</string>
+    <string name="allowlist_hint">example.com</string>
+    <string name="allowlist_bad_domain">That doesn\'t look like a domain name.</string>
+    <string name="button_allow_add">Add to allowlist</string>
+    <string name="button_allow_remove">Remove typed domain</string>
+
+    <!-- Query log (Phase 2) -->
+    <string name="section_log">Query log</string>
+    <string name="log_explainer">The most recent lookups Sphinx questioned — kept only in memory on this phone, never sent anywhere, and gone when the app\'s process stops. Recording is on by default so you can see Sphinx working; turn it off any time.</string>
+    <string name="log_toggle">Record queries</string>
+    <string name="log_off">Recording is off. Sphinx is still filtering — it just isn\'t writing anything down.</string>
+    <string name="log_empty">Nothing questioned yet. Turn Sphinx on and use any app — lookups will show up here.</string>
+    <string name="button_clear_log">Clear log</string>
 </resources>

@@ -11,17 +11,21 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import com.sentinelsafeguard.sphinx.MainActivity
 import com.sentinelsafeguard.sphinx.R
-import com.sentinelsafeguard.sphinx.core.Blocklist
 import com.sentinelsafeguard.sphinx.core.DnsPacket
+import com.sentinelsafeguard.sphinx.core.FilterLists
 import com.sentinelsafeguard.sphinx.core.IpUdpPacket
+import com.sentinelsafeguard.sphinx.core.QueryLog
+import com.sentinelsafeguard.sphinx.lists.ListStore
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -30,20 +34,25 @@ import java.util.concurrent.atomic.AtomicLong
  * Establishes a TUN interface and routes ONLY the virtual DNS server
  * address (10.10.10.10) through it, so the system hands this service its
  * DNS lookups and nothing else. Each query is checked against the
- * blocklist: blocked names get a sinkhole answer built on the spot;
- * allowed queries are forwarded to an upstream resolver over a protected
- * socket (protected, so the query can't loop back into the VPN) and the
- * real answer is written back into the TUN.
+ * active lists (downloaded lists when valid, otherwise the bundled
+ * list; the user's allowlist always wins): blocked names get a sinkhole
+ * answer built on the spot; allowed queries are forwarded to an upstream
+ * resolver over a protected socket (protected, so the query can't loop
+ * back into the VPN) and the real answer is written back into the TUN.
  *
  * There is no remote VPN server. Nothing leaves the phone except the
- * allowed DNS queries themselves, which go to the public resolver —
- * exactly where they would have gone without Sphinx.
+ * allowed DNS queries themselves (to the public resolver — exactly
+ * where they would have gone without Sphinx) and, when the user taps
+ * "Update lists now", HTTPS fetches of the blocklist sources shown in
+ * the app. The query log is memory-only, on this device, and can be
+ * turned off in the app.
  */
 class SphinxVpnService : VpnService() {
 
     companion object {
         const val ACTION_START = "com.sentinelsafeguard.sphinx.action.START"
         const val ACTION_STOP = "com.sentinelsafeguard.sphinx.action.STOP"
+        const val ACTION_RELOAD_LISTS = "com.sentinelsafeguard.sphinx.action.RELOAD_LISTS"
 
         private const val VIRTUAL_DNS = "10.10.10.10"
         private const val DNS_PORT = 53
@@ -60,6 +69,11 @@ class SphinxVpnService : VpnService() {
 
         val blockedCount = AtomicLong(0)
         val allowedCount = AtomicLong(0)
+
+        /** Recent queries, newest last in the buffer (snapshot() shows
+         *  newest first). Memory-only; shared with the UI so the user
+         *  can see and clear what Sphinx questioned. */
+        val queryLog = QueryLog()
     }
 
     private var tunInterface: ParcelFileDescriptor? = null
@@ -75,23 +89,55 @@ class SphinxVpnService : VpnService() {
     @Volatile
     private var running = false
 
-    private lateinit var blocklist: Blocklist
+    private lateinit var store: ListStore
+
+    // The lists in force. Loaded off the main thread (parsing a real
+    // blocklist takes a moment); the first load is awaited before the
+    // filter starts, and later reloads swap the reference atomically —
+    // queries in flight keep using the list they started with, and the
+    // new list answers only once it is fully parsed and validated.
+    @Volatile
+    private var filterLists: FilterLists? = null
+
+    private val listsReady = CountDownLatch(1)
+
+    @Volatile
+    private var logEnabled = true
 
     override fun onCreate() {
         super.onCreate()
-        blocklist = assets.open("starter-blocklist.txt").bufferedReader().useLines { lines ->
-            Blocklist.fromLines(lines)
-        }
+        store = ListStore(this)
+        Thread({
+            reloadListsNow()
+            listsReady.countDown()
+        }, "sphinx-list-loader").start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            shutdown()
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                shutdown()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_RELOAD_LISTS -> {
+                // A list update, an allowlist edit, or a settings
+                // change: reload in the background and swap when ready.
+                // Never starts the filter by itself.
+                Thread({ reloadListsNow() }, "sphinx-list-reloader").start()
+                return START_NOT_STICKY
+            }
+            else -> {
+                if (!running) {
+                    // Don't run unfiltered while the lists load: wait
+                    // for the first load (bounded — parsing is fast,
+                    // and the bundled asset cannot be missing).
+                    listsReady.await(15, TimeUnit.SECONDS)
+                    startFilter()
+                }
+                return START_STICKY
+            }
         }
-        if (!running) startFilter()
-        return START_STICKY
     }
 
     override fun onRevoke() {
@@ -103,6 +149,11 @@ class SphinxVpnService : VpnService() {
     override fun onDestroy() {
         shutdown()
         super.onDestroy()
+    }
+
+    private fun reloadListsNow() {
+        filterLists = store.loadEffectiveLists()
+        logEnabled = store.queryLogEnabled()
     }
 
     private fun startFilter() {
@@ -160,7 +211,12 @@ class SphinxVpnService : VpnService() {
             val dns = DnsPacket.parse(queryBytes, queryBytes.size) ?: return
             if (dns.isResponse) return
 
-            if (blocklist.isBlocked(dns.questionName)) {
+            val lists = filterLists ?: return
+            val blocked = lists.isBlocked(dns.questionName)
+            if (logEnabled) {
+                queryLog.record(dns.questionName, blocked, System.currentTimeMillis())
+            }
+            if (blocked) {
                 blockedCount.incrementAndGet()
                 writeResponse(output, IpUdpPacket.buildResponse(ip, dns.buildSinkholeResponse()))
             } else {
