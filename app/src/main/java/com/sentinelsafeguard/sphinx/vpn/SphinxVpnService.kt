@@ -19,6 +19,8 @@ import java.io.FileOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
@@ -62,7 +64,12 @@ class SphinxVpnService : VpnService() {
 
     private var tunInterface: ParcelFileDescriptor? = null
     private var readerThread: Thread? = null
-    private val workers = Executors.newFixedThreadPool(4)
+
+    // Recreated by startFilter() when a previous shutdown() killed the
+    // pool: a stopped ExecutorService can never take tasks again, and
+    // this instance can be re-started after onRevoke/ACTION_STOP paths
+    // that did not destroy it.
+    private var workers: ExecutorService = Executors.newFixedThreadPool(4)
     private val writeLock = Any()
 
     @Volatile
@@ -89,6 +96,7 @@ class SphinxVpnService : VpnService() {
 
     override fun onRevoke() {
         shutdown()
+        stopSelf() // the VPN is gone; don't linger as a zombie instance
         super.onRevoke()
     }
 
@@ -98,6 +106,9 @@ class SphinxVpnService : VpnService() {
     }
 
     private fun startFilter() {
+        if (workers.isShutdown) {
+            workers = Executors.newFixedThreadPool(4)
+        }
         startForegroundWithNotification()
         val descriptor = Builder()
             .setSession(getString(R.string.app_name))
@@ -128,49 +139,85 @@ class SphinxVpnService : VpnService() {
             }
             if (length <= 0) continue
             val packet = buffer.copyOf(length)
-            workers.execute { handlePacket(packet, output) }
+            try {
+                workers.execute { handlePacket(packet, output) }
+            } catch (e: Exception) {
+                // Pool shut down mid-stop: drop the packet; the loop
+                // condition ends the thread on the next pass.
+            }
         }
     }
 
     private fun handlePacket(packet: ByteArray, output: FileOutputStream) {
-        val ip = IpUdpPacket.parse(packet, packet.size) ?: return
-        if (ip.destPort != DNS_PORT) return
-        if (!ip.destAddress.contentEquals(VIRTUAL_DNS_BYTES)) return
+        // Nothing in here may throw: one malformed packet gets dropped,
+        // never takes a worker — or the filter — down with it.
+        try {
+            val ip = IpUdpPacket.parse(packet, packet.size) ?: return
+            if (ip.destPort != DNS_PORT) return
+            if (!ip.destAddress.contentEquals(VIRTUAL_DNS_BYTES)) return
 
-        val queryBytes = packet.copyOfRange(ip.payloadOffset, ip.payloadOffset + ip.payloadLength)
-        val dns = DnsPacket.parse(queryBytes, queryBytes.size) ?: return
-        if (dns.isResponse) return
+            val queryBytes = packet.copyOfRange(ip.payloadOffset, ip.payloadOffset + ip.payloadLength)
+            val dns = DnsPacket.parse(queryBytes, queryBytes.size) ?: return
+            if (dns.isResponse) return
 
-        if (blocklist.isBlocked(dns.questionName)) {
-            blockedCount.incrementAndGet()
-            writeResponse(output, IpUdpPacket.buildResponse(ip, dns.buildSinkholeResponse()))
-        } else {
-            val answer = forward(queryBytes)
-            if (answer != null) {
+            if (blocklist.isBlocked(dns.questionName)) {
+                blockedCount.incrementAndGet()
+                writeResponse(output, IpUdpPacket.buildResponse(ip, dns.buildSinkholeResponse()))
+            } else {
+                // Count at the decision, per FILTER-SPEC.md ("allowed
+                // (forwarded)") — an upstream failure must not make a
+                // let-through query vanish from both counters.
                 allowedCount.incrementAndGet()
-                writeResponse(output, IpUdpPacket.buildResponse(ip, answer))
+                val answer = forward(queryBytes)
+                if (answer != null) {
+                    writeResponse(output, IpUdpPacket.buildResponse(ip, answer))
+                }
+                // No answer from any upstream: leave the query unanswered
+                // and let the asking app retry, per FILTER-SPEC.md.
             }
-            // No answer from any upstream: leave the query unanswered and
-            // let the asking app retry, per FILTER-SPEC.md.
+        } catch (e: Exception) {
+            // Dropped. Hostile input ends here, quietly.
         }
     }
 
     /** Send a DNS query to the upstream resolvers; null if all fail. */
     private fun forward(query: ByteArray): ByteArray? {
+        val queryId = if (query.size >= 2) {
+            ((query[0].toInt() and 0xFF) shl 8) or (query[1].toInt() and 0xFF)
+        } else {
+            return null
+        }
         for (resolver in UPSTREAM_RESOLVERS) {
             var socket: DatagramSocket? = null
             try {
                 socket = DatagramSocket()
                 protect(socket) // keep our own queries out of the VPN
                 socket.soTimeout = UPSTREAM_TIMEOUT_MS
-                val address = InetAddress.getByName(resolver)
-                socket.send(DatagramPacket(query, query.size, address, DNS_PORT))
+                // Connected, not just addressed: the kernel then only
+                // delivers datagrams that actually come from this
+                // resolver, so a stray or spoofed packet from anything
+                // else on the network can't be mistaken for the answer.
+                socket.connect(InetSocketAddress(InetAddress.getByName(resolver), DNS_PORT))
+                socket.send(DatagramPacket(query, query.size))
                 val buffer = ByteArray(MAX_PACKET)
-                val response = DatagramPacket(buffer, buffer.size)
-                socket.receive(response)
-                return buffer.copyOf(response.length)
+                // Accept only the answer to *this* query: matching ID,
+                // QR (response) bit set. Anything else is ignored while
+                // the timeout runs — the same discipline every stub
+                // resolver applies. (FILTER-SPEC.md, forwarding rules.)
+                while (true) {
+                    val response = DatagramPacket(buffer, buffer.size)
+                    socket.receive(response)
+                    if (response.length >= 4) {
+                        val responseId =
+                            ((buffer[0].toInt() and 0xFF) shl 8) or (buffer[1].toInt() and 0xFF)
+                        val isResponse = buffer[2].toInt() and 0x80 != 0
+                        if (responseId == queryId && isResponse) {
+                            return buffer.copyOf(response.length)
+                        }
+                    }
+                }
             } catch (e: Exception) {
-                // Try the next resolver.
+                // Timeout or socket error: try the next resolver.
             } finally {
                 socket?.close()
             }

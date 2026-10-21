@@ -48,6 +48,11 @@ A blocked query is answered locally and never leaves the device:
 - Timeout: 3 seconds per upstream attempt; try the fallback once before
   giving up. If both fail, the query goes unanswered (the asking app
   retries on its own schedule).
+- A response counts as the answer only if it comes from the resolver
+  the query was sent to and its DNS ID matches the query's ID with the
+  response (QR) bit set. Anything else arriving on the socket is
+  ignored — a stray or spoofed datagram is never delivered to the
+  asker as if it were the answer.
 - Upstream traffic must never be routed back into the filter itself
   (on Android: the forwarding socket is protected from the VPN).
 
