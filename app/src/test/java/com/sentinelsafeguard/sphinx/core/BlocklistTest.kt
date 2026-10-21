@@ -145,6 +145,20 @@ class BlocklistTest {
     }
 
     @Test
+    fun normalizeEntryAppliesTheParsingRails() {
+        // The validation every entry path shares: what the parser
+        // would drop at load time is refused at entry time.
+        assertEquals("ads.example.com", Blocklist.normalizeEntry("*.ADS.example.com."))
+        assertEquals(null, Blocklist.normalizeEntry("com")) // single label
+        assertEquals(null, Blocklist.normalizeEntry("*.org")) // wildcard onto a single label
+        assertEquals(null, Blocklist.normalizeEntry("localhost.localdomain")) // reserved
+        assertEquals(null, Blocklist.normalizeEntry("localhost")) // reserved + single label
+        assertEquals(null, Blocklist.normalizeEntry("1.2.3.4")) // IP literal
+        assertEquals(null, Blocklist.normalizeEntry("not a domain"))
+        assertEquals(null, Blocklist.normalizeEntry(null))
+    }
+
+    @Test
     fun fromLinesDeduplicates() {
         val list = Blocklist.fromLines(
             sequenceOf(

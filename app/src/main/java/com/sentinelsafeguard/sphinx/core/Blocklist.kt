@@ -47,6 +47,24 @@ class Blocklist(entries: Collection<String>) {
             return name
         }
 
+        /**
+         * Canonical form of a single list *entry*, or null if the input
+         * may not be one: everything [normalize] requires, plus the
+         * parsing safety rails — no single-label entries (a one-word
+         * entry would block a whole top-level domain) and no reserved
+         * local names. The list parser uses this, and so does every
+         * other path that accepts an entry (an allowlist editor, a
+         * custom-entry field), so an entry that would be dropped at
+         * load time is refused at entry time instead of silently
+         * doing nothing.
+         */
+        fun normalizeEntry(raw: String?): String? {
+            val name = normalize(raw) ?: return null
+            if ('.' !in name) return null
+            if (name in RESERVED_NAMES) return null
+            return name
+        }
+
         private val DOMAIN_SHAPE =
             Regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")
 
@@ -117,9 +135,7 @@ class Blocklist(entries: Collection<String>) {
         }
 
         private fun addEntry(token: String, out: MutableSet<String>) {
-            val name = normalize(token) ?: return
-            if ('.' !in name) return // single label: see safety rails above
-            if (name in RESERVED_NAMES) return
+            val name = normalizeEntry(token) ?: return
             out.add(name)
         }
 
