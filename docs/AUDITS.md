@@ -8,6 +8,193 @@ never merely to make a report prettier).
 
 ---
 
+## Windows Phase 2 audit — tray host, start-at-sign-in, installer (2026-10-21)
+
+Scope: the Windows edition's Phase 2 (commits 660ca650..718f8c2d):
+the tray-resident host, the startup decision table, the UAC
+relaunch, start-at-sign-in, the installer, and a regression pass
+over the Phase 1 audit's gates (which this phase inherited as law).
+
+Method: full read of the Phase 2 diff against FILTER-SPEC and the
+Phase 1 audit record (local tree verified blob-identical to remote
+HEAD 718f8c2d, 97 blobs; the diff itself verified through the API
+to be exactly the phase's 21 files — no `dnsmgmt` file, and no
+other Phase 1 audited file, moved; the controller's only changes
+are the four intent writes and the leftover dismissal moving onto
+it, each inspected). The pytest suite as baseline (reproduced:
+146 passed / 2 skipped on system Python, 153 passed / 1 skipped
+in the PySide6 environment). A brute-force sweep of the startup
+decision table (all 64 state × intent × launch × attempt ×
+elevation cells, invariant-checked); headless TrayHost probes
+(elevation success/decline, leftover at sign-in, resume fidelity,
+failed sign-in engage); and CI's artifacts — re-verified for the
+final audited HEAD below, as in the Phase 1 round.
+
+### Fixed
+
+1. **LOW — Two launches in the same instant could both become
+   hosts.** The single-instance rule was a probe (connect to the
+   running host's channel) followed by a claim (listen on it):
+   two launches interleaved in that window both probed an empty
+   channel, and the loser of the claim then ran on with no server
+   as a full second host — a second owner of the machine's DNS
+   state, the thing the one-owner design exists to prevent. The
+   realistic consequences were bounded (the port-53 bind and the
+   guard's backup discipline prevent dual filtering or DNS
+   corruption, and each window's read-back status would show the
+   fight), but the claim now retries: a failed claim is followed
+   by fresh probes before the net is given up, so the loser finds
+   the winner listening and becomes a "show" instead of a rival.
+   The acquisition is factored into `acquire_instance`
+   (app/main.py) and unit-tested with simulated races, including
+   the exact lose-the-claim-then-show sequence; it was also
+   exercised against real Qt local sockets (free channel →
+   host; held channel → show, with the running host receiving
+   the show request). *(app/main.py, tests/test_main.py)*
+
+2. **LOW — The two writers of the sign-in value were pinned to
+   nothing.** The app reads start-at-sign-in as "enabled" only
+   when the stored Run value is *exactly* the command this build
+   would write; the installer writes that value too, from its own
+   script, in its own quoting. Had the two strings ever drifted —
+   a quote, a flag, a path shape — an installer-set sign-in start
+   would still have launched at sign-in while the app's checkbox
+   showed it off: the status lying about the machine, the failure
+   class the Phase 1 audit fixed for DNS state. They agree today;
+   the agreement is now pinned by tests that derive the expected
+   key path, value name, and full command string from the app's
+   own constants and the frozen build's command builder, so a
+   drift on either side fails the suite instead of reaching a
+   user. *(tests/test_installer.py)*
+
+### Documented and ignored
+
+- **The per-user mechanism follows the elevated token's user.**
+  The Run value (HKCU), the data folder (%LOCALAPPDATA%), and the
+  intent record all belong to the account whose token the process
+  holds. In the mainstream case (the user's own account, UAC
+  consent) that is one person throughout. Under an
+  over-the-shoulder elevation — a standard user entering a
+  *different* administrator's credentials — the elevated surfaces
+  would act on the administrator account's hive and data folder
+  instead. That is a property of the per-user mechanism Windows
+  offers, not of this implementation; changing it means a
+  per-machine (HKLM) sign-in entry and a machine-wide data store,
+  a product decision about who Sphinx belongs to on a shared
+  machine — not an audit fix. Recorded here for the release gate
+  to weigh, with the same note applying to the installer's HKCU
+  entry. No behavior changed.
+
+### Verified clean
+
+- **The decision table, cell by cell.** All 64 combinations
+  satisfy the invariants: UNKNOWN always surfaces and is never
+  taken over; LEFTOVER always surfaces and waits; ENGAGE occurs
+  in exactly one cell (disengaged + intent on + sign-in launch +
+  elevated); RESUME only when engaged and elevated;
+  `may_auto_elevate` only on a NEEDS_ADMIN from a sign-in launch
+  with no attempt yet and no elevation. A manual launch never
+  engages on its own, and intent plays no part in resuming an
+  engagement — correctly: a machine found engaged has its DNS
+  pointed at a resolver that is not answering until something
+  serves again, and FILTER-SPEC's rule is resume-against-the-
+  record, which the probes confirm is what happens.
+- **The UAC discipline.** Probes: a sign-in NEEDS_ADMIN asks
+  exactly once, with the relaunch carrying both the sign-in flag
+  and the attempted marker; approval hands off (the old instance
+  releases the channel and exits — the exit path in main releases
+  before returning); a declined prompt leaves the host in the
+  tray, off, with `needs_admin` set and protection honestly off;
+  the flagged relaunched instance never asks a second time.
+- **Intent is written only at successful transitions —
+  grep-proved.** `set_protection_intent` is called from exactly
+  four places, all in the controller: after a verified engage in
+  start(), after a verified restore in stop(), after a verified
+  restore in the leftover restore path, and after an actual
+  dismissal. Nothing in the host, the window, or the entry point
+  writes it. Pinned at failed transitions too: a failed start
+  records nothing, a failed stop keeps intent on (protection is
+  still on — the record tells the truth).
+- **Resume never re-saves.** A fresh host over a machine left
+  engaged resumes against the existing record; the backup file
+  is byte-identical afterwards. A leftover at sign-in is
+  surfaced untouched — no engage, no restore, the record intact
+  for the user's own Restore / Dismiss. A sign-in engage that
+  fails (filter cannot answer) surfaces in the window instead
+  of sitting silent in the tray, and records nothing.
+- **Tray lifecycle.** Closing the window hides it and stops
+  nothing (probe: protection running across the close). Tray
+  Quit runs the verified stop and is refused when the restore
+  fails, exactly as the window's no-tray close is. The tray's
+  status text is the window's read-back status, pushed on every
+  refresh — never the running flag alone.
+- **The single-instance channel cannot steer anything.** The
+  "show" payload is discarded unread; any process that can reach
+  the per-user channel can at most raise Sphinx's window, which
+  shows the machine's real (read-back) state. It carries no
+  commands and changes no state. That is the whole of its
+  authority, assessed as proportionate for a per-user channel.
+- **The headless restore.** `--restore-dns` exits 0 when nothing
+  is held and when a leftover's record is restored (record
+  retired, originals in force), 3 with the record kept when the
+  restore fails or rights are missing — the contract the
+  installer's InitializeUninstall abort depends on, which reads
+  the script itself confirms: the restore runs from
+  InitializeUninstall, before any file is removed, and any
+  nonzero exit aborts the uninstall with a plain-language
+  message. The user's data folder is left in place, as
+  documented; the uninstall's Run-value removal matches the
+  value the script and the app both write (fixed item 2).
+- **The Phase 1 gates held.** The Phase 2 diff touches no
+  `dnsmgmt` file; per-family proof, configured-not-effective
+  reads, the 64-slot in-flight cap, proof hygiene, and the
+  throttled (15 s) read-back status are exactly the audited
+  code. The non-elevated tray toggle is a live button (the
+  window's is disabled) — assessed and accepted: clicking it
+  runs the normal start path, which changes nothing without
+  rights and explains so in the guard's plain language, and the
+  same menu carries Restart as administrator.
+- **CI and artifacts for the audited HEAD:** the windows-latest
+  run is green (suite, the real-manager read smoke, PyInstaller,
+  portable assembly, installer build), and the three artifacts
+  were downloaded and re-verified locally — SHA256SUMS match,
+  Sphinx.exe a genuine PE, SphinxSetup.exe a genuine Inno Setup
+  binary, the portable zip one folder with its exe byte-identical
+  to the standalone. (Numbers in the closing report of this
+  audit; the suite stands at 159 tests in the PySide6
+  environment after the fixes.)
+
+### Verification ceiling, stated plainly
+
+As in the Phase 1 round: the installer is proven by compilation
+in CI, by the script's pinned promises (now including the
+two-writer pin), and by artifact inspection — an end-to-end
+install → engage → uninstall pass on a real Windows machine
+remains release-gate work, alongside the real-DHCP engage/stop
+proof and the Android edition's real-device pass. The
+single-instance race is proven closed at the logic level
+(simulated interleavings + real-socket role checks); a timed
+two-process reproduction belongs to the same real-machine pass.
+
+### Verdict
+
+Phase 2's hosting change kept the audited discipline intact —
+the decision table is exact, intent is written only where the
+crew claimed, and the host never presents a state it hasn't
+read. The two findings were a race at the claim window and an
+unpinned agreement between the sign-in value's two writers;
+both are fixed and regression-pinned. **The Windows edition is
+ready for its remaining roadmap items** — HUD polish in the
+fleet's final style, and profiles parity if Skyler wants the
+Android edition's profiles on Windows (the intent and store
+discipline they need is already in place) — **and then the
+release gate**: independent audit → fix → re-audit of the whole
+edition, signed builds, published checksums, and the real-machine
+proofs (installer end-to-end, DHCP engage/stop, two-process
+instance timing) this audit and the last both parked there.
+
+---
+
 ## Windows Phase 1 audit — the filter service and the DNS engagement (2026-10-21)
 
 Scope: the Windows edition's Phase 1 (commits 69a58949..ede44dc9):
