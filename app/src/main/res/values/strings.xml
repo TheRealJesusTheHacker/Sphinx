@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sphinx</string>
+    <string name="tagline">Every request gets questioned.</string>
+    <string name="explainer">Sphinx blocks ads and trackers across your whole phone by questioning DNS lookups on the device itself. No remote server, no root. It cannot remove ads served from the same address as the content — YouTube is the honest example.</string>
+    <string name="status_on">Sphinx is on — questioning requests</string>
+    <string name="status_off">Sphinx is off</string>
+    <string name="button_start">Turn on</string>
+    <string name="button_stop">Turn off</string>
+    <string name="counter_blocked">Blocked: %1$d</string>
+    <string name="counter_allowed">Allowed: %1$d</string>
+    <string name="notification_channel_name">Sphinx status</string>
+    <string name="notification_title">Sphinx is on</string>
+    <string name="notification_text">Questioning DNS requests on this device.</string>
+    <string name="notification_stop">Turn off</string>
+</resources>

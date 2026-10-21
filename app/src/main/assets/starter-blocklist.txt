@@ -1,0 +1,45 @@
+# Sphinx starter blocklist — Phase 1.
+# One domain per line. An entry blocks the domain and all its subdomains
+# (see docs/FILTER-SPEC.md). Small on purpose: the real list engine,
+# with larger curated lists and remote updates, is Phase 2.
+#
+# --- Advertising networks ---
+doubleclick.net
+googleadservices.com
+googlesyndication.com
+adservice.google.com
+ads.yahoo.com
+advertising.com
+adnxs.com
+adsrvr.org
+criteo.com
+criteo.net
+rubiconproject.com
+pubmatic.com
+openx.net
+casalemedia.com
+adform.net
+smartadserver.com
+yieldmanager.com
+mathtag.com
+amazon-adsystem.com
+adcolony.com
+applovin.com
+unityads.unity3d.com
+vungle.com
+chartboost.com
+mopub.com
+inmobi.com
+smaato.net
+outbrain.com
+taboola.com
+# --- Trackers and telemetry ---
+scorecardresearch.com
+quantserve.com
+demdex.net
+bluekai.com
+exelator.com
+krxd.net
+moatads.com
+mixpanel.com
+bidmachine.io
