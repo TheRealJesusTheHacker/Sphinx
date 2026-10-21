@@ -239,6 +239,12 @@ Starts after the Android core lands.
   against a fake DNS manager, and controller start/stop ordering.
   One live-socket round-trip test self-skips where the build
   sandbox blocks unconnected UDP replies; it runs in CI.
+- **Independent audit (2026-10-21):** nine findings fixed and
+  re-probed — two highs where the platform met the restore
+  discipline (DHCP-vs-static reads; a loopback recordable as an
+  "original" in the partial case) — full record in
+  docs/AUDITS.md. CI artifacts were downloaded and re-verified
+  (checksums, PE, portable layout).
 
 Still ahead for this edition: the installer, HUD polish in the
 fleet's final style, a tray/service host, and the release gate

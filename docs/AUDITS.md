@@ -8,6 +8,215 @@ never merely to make a report prettier).
 
 ---
 
+## Windows Phase 1 audit — the filter service and the DNS engagement (2026-10-21)
+
+Scope: the Windows edition's Phase 1 (commits 69a58949..ede44dc9):
+system-DNS backup/restore integrity and takeover safety,
+FILTER-SPEC parity with the audited Android brain, dual-family
+handling, query-log privacy, the CI artifacts (downloaded and
+verified, not assumed), and a regression pass proving the Android
+tree untouched.
+
+Method: full read of the windows/ tree against FILTER-SPEC and the
+Android audit record (local tree verified blob-identical to remote
+HEAD ede44dc9 before starting); the pytest suite as baseline
+(reproduced: 97 passed, 2 skipped on system Python — the skips are
+the PySide6 smoke and the sandbox-blocked live round trip);
+adversarial probes of the guard/controller/server against the fake
+manager and live loopback sockets; the green CI run's artifacts
+downloaded and re-verified locally (SHA256SUMS match byte-for-byte;
+Sphinx.exe is a genuine x86-64 PE, 50,714,321 bytes; the portable
+zip is one folder holding the exe and the portable.txt marker, its
+exe identical to the standalone). Baseline suite after the fixes:
+115 passed, 1 skipped (PySide6 venv; the remaining skip is the
+sandbox round trip, which runs in CI).
+
+### Fixed
+
+1. **HIGH — Restore was not exact on DHCP machines: the
+   production manager could not tell "automatic" from "static".**
+   The DnsManager contract records the *configured* servers, with
+   an empty list meaning "obtain DNS automatically (DHCP)".
+   `WindowsDnsManager` read them with
+   `Get-DnsClientServerAddress`, which reports the *effective*
+   servers — on a DHCP adapter (the common case), the addresses
+   DHCP handed out. So the "original" a backup recorded was a
+   DHCP snapshot dressed as a static configuration, and
+   disengaging pinned exactly those addresses with
+   `-ServerAddresses` instead of resetting the adapter to
+   automatic: stopping Sphinx silently converted the machine from
+   automatic DNS to a static copy of one network's DNS — the exact
+   failure the restore discipline exists to prevent, invisible to
+   the whole suite because the fake honors the contract the real
+   implementation couldn't. Reads now take what
+   `Set-DnsClientServerAddress` itself writes: the per-interface
+   `NameServer` registry value (Tcpip / Tcpip6, keyed by interface
+   GUID), where absent/empty means automatic; the interpretation
+   is a pure, unit-tested Python function, the contract in base.py
+   now says "configured, not effective" in so many words, and a
+   new CI smoke step executes the real manager's reads on
+   windows-latest so the scripts are exercised on every build.
+   FILTER-SPEC's Windows notes gained the configured-vs-effective
+   rule for every future edition. *(dnsmgmt/windows_impl.py,
+   dnsmgmt/base.py, .github/workflows/sphinx-windows.yml)*
+
+2. **HIGH — A fresh engage could record a loopback as an
+   "original."** The no-takeover refusal fired only when *every*
+   adapter already pointed at a loopback. With one adapter/family
+   pre-pointed at some other local resolver (another blocker, a
+   local stub) and the rest normal, engage saved the backup with
+   the loopback recorded as that adapter's original — and the
+   eventual restore left it pointing at 127.0.0.1 with nothing
+   listening: broken DNS, manufactured by the restore itself
+   (probe: backup held `["127.0.0.1"]` as an original; after
+   disengage the adapter sat at the dead loopback). A fresh save
+   is now refused when *any* target already sits at its family's
+   loopback, with the same plain-language guidance as the
+   all-loopback case. *(dnsmgmt/guard.py)*
+
+3. **MEDIUM — Engage aimed DNS at loopbacks the filter never
+   bound.** The server binds IPv6 loopback best-effort, but the
+   controller engaged *both* families unconditionally — on a
+   machine where ::1 couldn't bind (IPv6 unavailable), IPv6 DNS
+   was pointed at a resolver that isn't answering, against the
+   server's own documented contract ("the DNS manager is pointed
+   only at loopbacks that answer"). Engage now takes the set of
+   proven loopbacks; unproven families are still recorded in the
+   backup but their DNS is never moved, the result message says
+   so, and state detection understands the partial engagement (a
+   recorded adapter at its loopback, the rest at their recorded
+   originals, is ENGAGED — not a leftover). An engagement that
+   could switch nothing fails and retires its just-saved backup.
+   *(dnsmgmt/guard.py, app/controller.py)*
+
+4. **MEDIUM — Unbounded handler threads.** The threading servers
+   spawned a thread per datagram/connection with no cap; every
+   forwarded query can park its thread for the 3-second upstream
+   wait, so a hostile or malfunctioning local app — the exact
+   input this filter exists to sit in front of — grew the
+   process without limit (probe: 150 datagrams → ~150 threads).
+   In-flight work is now capped (64 across all listeners, the
+   Android Phase 3 audit's disposition): excess UDP queries go
+   unanswered, excess TCP connections are refused, and a stalled
+   TCP client loses its slot after 10 s. The counters count
+   processed queries, so under an extreme flood they understate
+   the total stopped — stated in the server module, as in the
+   Android record. Probe after the fix: thread growth exactly
+   64. *(core/server.py)*
+
+5. **MEDIUM — The window re-read the machine's DNS state every
+   second.** The 1-second refresh timer ran detect_state
+   unthrottled; on real Windows each detection is several
+   PowerShell processes (one per adapter read), so a window meant
+   to sit open all day would have burned a core on bookkeeping.
+   State is now re-read at most every 15 seconds, immediately
+   after any action that changes it, and failures are throttled
+   the same way. The same rework closed an honesty gap: while
+   running, the status used to claim "DNS points at the filter"
+   from the running flag alone; if detection says the engagement
+   is gone (something changed DNS underneath the filter), the
+   status now says exactly that and tells the user to cycle the
+   filter. *(app/tray_app.py)*
+
+6. **LOW — The backup loader honored impossible records.** A
+   corrupt or hand-edited `dns-backup.json` was applied as
+   written: a pure-loopback "original" (which engage can never
+   legitimately record) would be set onto a live adapter by the
+   leftover Restore (probe: DNS set to 127.0.0.1, nothing
+   listening), and an unknown family value crashed state
+   detection with a KeyError. Entries are now validated one by
+   one at load — known family, an alias, never a pure-loopback
+   original — and bad entries are dropped individually instead of
+   voiding (or poisoning) the whole record. *(dnsmgmt/guard.py)*
+
+7. **LOW — The liveness proof polluted the counters and the
+   query log.** Every start proved each bound loopback by running
+   a real query through the engine — which counted it as an
+   allowed user query and wrote `example.com` into the user's
+   query log. The proof exchange is now registered by a one-shot
+   token (random ID + name) and answered through the identical
+   decision path with recording off: same answer, no count, no
+   log entry. *(core/server.py)*
+
+8. **LOW — Turning the query log off erased it.** The
+   controller's toggle cleared the buffer, but FILTER-SPEC treats
+   "off" and "clear" as separate controls (the Android edition's
+   audited behavior is the same). The toggle now only stops
+   recording; the Clear button is the only eraser.
+   *(app/controller.py)*
+
+9. **LOW — A timeout constant promised what the code didn't do.**
+   The updater defined a 15 s connect timeout that was never
+   used; urllib applies the single 30 s timeout to connect and
+   reads alike. The dead constant is gone and the comment says
+   what the timeout actually is. *(core/updater.py)*
+
+### Verified clean
+
+- **Engage/restore against the fake:** verified saves (read-back
+  before any change), backups never overwritten, mid-engage
+  failure rolls back and keeps the backup, failed restores keep
+  the backup and are reported by name, leftover detection and
+  dismissal change no settings, and the controller's close path
+  refuses to close when a restore fails — all as the build
+  claimed, suite- and probe-backed.
+- **FILTER-SPEC parity:** parser rails (reserved names,
+  single-label, IP literals), suffix matching with allowlist-wins
+  (rule 5), sinkhole bytes (A→0.0.0.0, AAAA→::, TTL 60), the
+  ≥1,000-domain gate counting unique domains, gated atomic
+  updates with kept copies (including the Android Phase 2
+  all-sources-failed fix, present here), HTTPS-only
+  redirect-vetted downloads, and the forwarding discipline
+  (connected socket, ID + QR validation, one overall deadline,
+  fallback once, truncated answers completed over TCP) — the
+  ported test suites pass against the same cases as the Android
+  JVM suites, and the bundled list parses to exactly **71,491**
+  domains in the Python core, pinned by test.
+- **Privacy, grep-proved:** the query log has no disk or network
+  path — every file write in the tree is a list, a user entry
+  file, state, or the DNS backup, and every network egress is the
+  forwarder (the user's own queries to the public resolvers), the
+  updater (user-tapped, user-visible HTTPS sources), or the
+  loopback server itself. Counters are counted at the decision,
+  per the audited semantics.
+- **Android untouched:** the tree diff between the audited
+  Android HEAD (49d94fd4) and the audited Windows HEAD
+  (ede44dc9) is exactly `windows/**`, the Windows workflow file,
+  and the docs — no Android source file moved.
+- **CI artifacts:** downloaded from the green run for the
+  audited HEAD and verified (see Method) — checksums, PE
+  validity, and the portable layout all check out; the portable
+  script and the workflow assemble the same shape.
+
+### Verification ceiling, stated plainly
+
+PowerShell cannot run on this VM, so the corrected read path
+(fixed item 1) is proven by the pure parser's unit tests, the
+stubbed-runner mapping tests, and code review — and from this
+audit on, by the CI smoke step executing the real reads on
+windows-latest. End-to-end proof on a real Windows machine
+(engage on a DHCP adapter, stop, confirm the adapter is back to
+*automatic* — not pinned) belongs to the edition's release gate,
+alongside the Android edition's real-device pass. Everything
+guard-side — the state machine the user's networking depends on —
+is fully proven here against the fake.
+
+### Verdict
+
+Phase 1's skeleton was honest: the fake-proven discipline was
+real, and the defects were where the platform met the discipline
+(the cmdlet's semantics, the unbound family, the unbounded
+threads). All nine findings are fixed and re-probed; the suite
+stands at 116 tests. **Windows Phase 2 (service/tray host +
+installer) can build on this** — with the standing reminder that
+Phase 2's host will own the same engage/restore paths, so it
+inherits this audit's gates unchanged: no engagement without
+proof per family, no save that could record a loopback or an
+effective-DHCP snapshot, and no state the status line hasn't
+actually read.
+
+---
+
 ## Phase 4 audit — profiles, boot, notifications, battery (2026-10-20)
 
 Scope: the boot path's three gates (opt-in, recorded intent,

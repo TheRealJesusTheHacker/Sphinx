@@ -270,14 +270,32 @@ The Windows edition engages by configuration, not by tunnel:
 - The machine's original settings are a restore point, under the
   fleet's restore discipline: saved **before** any change, the save
   verified by reading it back, an existing record never overwritten
-  (a loopback address is never recorded as an original), every
-  change verified by reading the adapter back, and turning the
-  filter off restores exactly what was recorded — including
-  "automatic (DHCP)" — before the record is retired. A saved record
+  (a loopback address is never recorded as an original — and if
+  *any* adapter already points at a loopback, a fresh save is
+  refused outright, because that adapter's previous settings are
+  unknowable), every change verified by reading the adapter back,
+  and turning the filter off restores exactly what was recorded —
+  including "automatic (DHCP)" — before the record is retired. A saved record
   found with DNS no longer pointing at the filter is its own state
   (a leftover), offered for restore or dismissal, never silently
   treated as on; loopback DNS with no record is never taken over,
   because settings Sphinx didn't save it cannot honestly restore.
+- "Original settings" means the **configured** settings. Where the
+  platform's query tools report *effective* values instead (on
+  Windows, `Get-DnsClientServerAddress` returns the addresses DHCP
+  handed out, indistinguishable from a static configuration), the
+  edition reads the configuration store itself — on Windows, the
+  per-interface `NameServer` registry value, where absent/empty
+  means automatic. Recording an effective DHCP snapshot as an
+  original would make a restore pin it statically, quietly
+  converting the machine from automatic to static DNS.
+- Engagement is **per family, and only where proven**: an adapter
+  family's DNS is pointed at a loopback only when the filter bound
+  that loopback and proved it answers. Families not engaged are
+  still recorded in the backup, their DNS is left exactly as it
+  was, and the engagement is reported as the partial thing it is —
+  an engagement on one family is still "engaged" (with the other
+  family simply not Sphinx's), never silently presented as both.
 - Administrator rights gate the *changes* only: the app opens,
   reports the real state, and explains the requirement without
   them, changing nothing.

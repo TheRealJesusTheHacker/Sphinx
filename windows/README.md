@@ -22,7 +22,10 @@ edition; nothing here is a finished public release.
   listener would leave a bypass lane open.)
 - When you turn it on, Sphinx points the DNS settings of the
   adapters that carry your connections (up, with a default route)
-  at those loopbacks. Blocked names get the spec's sinkhole answer
+  at those loopbacks — per family, and only where the filter has
+  first proved it answers: if it cannot listen on a family's
+  loopback, that family's DNS is left exactly as it was and the
+  result says so. Blocked names get the spec's sinkhole answer
   (0.0.0.0 / ::, TTL 60); allowed queries are forwarded unchanged
   to 1.1.1.1 (fallback 9.9.9.9) under the spec's answer-validation
   rules — connected socket, matching ID, response bit, one overall
@@ -40,7 +43,11 @@ the original settings the way Charon treats its restore point:
 2. Before anything changes, the current settings of every adapter
    it will touch are **saved to `dns-backup.json` in the data
    folder — and read back to prove the save is real.** No verified
-   save, no change.
+   save, no change. What gets saved is your *configured* settings,
+   read from the configuration itself: "automatic (DHCP)" is
+   recorded as automatic — never as a snapshot of whatever
+   addresses DHCP happened to hand out, which a restore would
+   otherwise pin in place as if you had set them by hand.
 3. An existing backup is **never overwritten**: if one is on disk,
    its recorded settings are the truth, so a loopback address can
    never be recorded as an "original."
