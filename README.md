@@ -140,8 +140,9 @@ the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md
    commands under the same restore discipline (a plain
    /etc/resolv.conf rewritten byte-exactly-restorable, or a
    systemd-resolved runtime override restored by revert — never a
-   pinned DHCP lease). *Phase 1 landed (daemon, guard, CLI, .deb);
-   list updates, rule stores, and profiles are Phase 2 — see
+   pinned DHCP lease). *Phases 1–2 landed (daemon, guard, CLI,
+   .deb; manual list updates, rule stores, profiles, and
+   boot/route-change resumption) — see
    [debian/README.md](debian/README.md).*
 4. Further platforms as feasible after those three.
 

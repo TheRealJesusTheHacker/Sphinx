@@ -386,20 +386,60 @@ the implementation as landed and audited (2026-10-21):
   is mode 0660 for the daemon's user/group and root: unprivileged
   `sphinx status` shows the real service/resolver state and says
   plainly that the counters need `sudo sphinx status`.
-- **Phase 1 parity scope, stated plainly:** no list updates, no
-  allowlist/custom-entry stores, no profiles — the bundled list
-  (the canonical Android asset, copied byte-checked into the .deb
-  at /usr/share/sphinx/bundled-blocklist.txt) is the blocklist,
-  and the daemon's allowlist is empty. The spec's update rules
-  (HTTPS-only, ≥1,000-domain gate, atomic swap, manual only) and
-  its stores are Phase 2 work; nothing in Phase 1 fetches anything.
+- **Phase 2 parity, landed:** the stores, the update path, and
+  profiles are in. Downloaded lists live beside the rule stores
+  in /var/lib/sphinx (the bundled list — the canonical Android
+  asset, copied byte-checked into the .deb at
+  /usr/share/sphinx/bundled-blocklist.txt — remains the floor
+  beneath them, so no update can leave the filter listless).
+  Updates follow this spec's rules — HTTPS only, redirects
+  followed by hand with every hop vetted, the ≥1,000-domain gate
+  per source and again on the merged set's *unique* domains,
+  atomic temp-and-rename swaps, manual only (`sphinx update`;
+  no timers, no background fetching) — with one sharpening this
+  edition states openly: **an update is all-or-nothing.** If any
+  source fails, nothing is swapped, every source keeps its
+  previous copy (the spec's rule, taken at full strength), and
+  the recorded last-updated time does not move. The daemon
+  watches the store's files and reloads the whole working set
+  when they change, so updates, rule edits (`sphinx allow` /
+  `sphinx block`), and profile switches (`sphinx profile`) land
+  in the running filter without a restart, never half-applied.
+  Profiles capture the allowlist and the custom entries only —
+  sources and blocklists stay shared, so a switch is never a
+  disguised list change. The update sources are the spec's two
+  defaults, named by `sphinx update` and `sphinx status` — an
+  edition fetches only from the sources it shows; editing the
+  source list from this edition's command line is not yet
+  offered, and the docs say so rather than imply otherwise.
+- **Boot / route-change resumption, decided (Phase 2):** the
+  guard's intent record — written only at verified engage /
+  restore / dismiss transitions — is the memory of whether
+  protection was on. When it says on, a saved record exists, and
+  live DNS no longer points at the filter (the resolved stack's
+  runtime engagement ends at a reboot or when the default route
+  moves to another link), the state is surfaced, never silently
+  repaired: the daemon notes it in the journal at start, and
+  `sphinx status` names it and the user's two commands.
+  `sudo sphinx engage` performs the re-engage through the
+  ordinary prove-then-point path: against the recorded originals
+  when the recorded link still carries the route (the record is
+  never re-saved), and *retargeted* when it does not — Sphinx's
+  stale override on the old link is undone and verified gone,
+  the new link's own settings are saved and verified, and only
+  then is the new link pointed, verified, and proven. Nothing is
+  ever re-pointed behind the user's back, and intent off — or no
+  record — means nothing is touched, ever.
 - Removal keeps the Windows installer law in dpkg form: prerm
   restores first — gated on a saved record actually existing —
   and aborts the removal when a restore cannot be verified. A
   plain remove leaves /var/lib/sphinx in place; purge deletes it
   and the service user. An upgrade runs the same restore (the
   record's originals are put back), so upgrading turns Sphinx
-  off; re-engage after an upgrade.
+  off; re-engage after an upgrade. Decided with the resumption
+  story above: the upgrade's restore writes the recorded
+  decision *off*, so an upgrade is never followed by a
+  resumption — the user re-engages, deliberately.
 
 ## Honesty rules baked into the design
 

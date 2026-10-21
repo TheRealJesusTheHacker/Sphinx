@@ -214,6 +214,27 @@ itself. With the parity gap named as Phase 2's content, the
 edition is ready for Phase 2 (updater + stores + profiles) and
 then its release gate alongside the other editions.
 
+### Note — the README license-section incident (appended 2026-10-21)
+
+Recorded here at the auditor's suggestion, so the incident lives
+in the audit record and not only in commit messages. Minutes
+before this audit's docs commit landed, e966098f ("license:
+Sphinx is MIT-licensed — add LICENSE + README license section",
+the owner's decision) had added a License section to the root
+README.md. The audit's docs commit (01f2448) carried a README.md
+edited from a snapshot taken before that commit, and its push
+silently dropped the License section again: no commit was lost
+and the git chain stayed linear, but the newer content reverted
+inside the docs commit — the content-level lost update the
+fleet's shared-doc rule (fetch the live file, diff, apply edits
+onto the fresh content; never whole-file replace from a stale
+base) exists to prevent. Repaired in 1a889fc ("audit repair:
+restore the README License section (MIT, e966098f) reverted by
+the Debian audit docs commit's stale README base") by
+re-applying the section onto the then-current HEAD, no other
+change. The License section stands at the end of README.md; the
+Phase 2 crew verified it present before appending this note.
+
 ---
 
 ## Windows Phase 3 audit — profiles parity and the palette HUD (2026-10-21)

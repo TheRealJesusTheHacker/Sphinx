@@ -15,40 +15,44 @@ Android and Windows editions and specified in
 agree on the lists (the bundled list parses to exactly **71,491
 domains** in every edition) and on the matching rules.
 
-## Phase 1 — what this is, and what it is not
+## What this is, and what it is not
 
-Phase 1 is the working core:
+The Debian edition, through Phase 2:
 
 - the filter daemon (a hardened systemd service) listening on
   loopback — 127.0.0.1 and ::1, UDP and TCP, port 53;
-- the bundled blocklist, loaded through the spec's sanity gate;
+- the bundled blocklist, loaded through the spec's sanity gate,
+  as the floor beneath any downloaded lists;
 - `sphinx engage` / `sphinx restore` / `sphinx status` — turning
   the filter on and off under the restore discipline below;
+- `sudo sphinx update` — fresh blocklists from Sphinx's two shown
+  sources, under the spec's update rules (see "List updates");
+- `sphinx allow` / `sphinx block` — your own rules, and
+  `sphinx profile` — named sets of them;
 - the `.deb` package (`packaging/build-deb.sh`).
 
-Phase 1 is **not** the finished product:
+It is **not** the finished product:
 
 - **No graphical interface yet.** The command line is the whole
-  interface in this phase.
-- **No profiles, no custom entries, no allowlist editing** — the
-  core supports the allowlist (it always wins, per the spec), and
-  a later phase brings the stores the other editions have.
-- **No list updates yet.** The bundled list is the blocklist in
-  this phase; downloaded lists are a later phase, under the spec's
-  update rules.
-- **Boot behavior is simple on purpose:** if the machine reboots
-  while Sphinx is on, the service (if you enabled it) starts again,
-  but on a systemd-resolved machine the *engagement* does not
-  silently come back — `sphinx status` will show a saved record
-  waiting, and you choose: `sudo sphinx engage` turns it back on
-  against the saved settings, `sudo sphinx restore` puts the saved
-  settings back. Nothing is ever re-pointed or restored behind
-  your back. The same honesty applies to change on a live machine:
-  the resolved override is runtime state on the one link that
-  carried the default route when you engaged — a reboot, a link
-  bounce, or the default route moving to another connection ends
-  it, and `sphinx status` then shows the saved record waiting
-  (a leftover), never a false "on."
+  interface.
+- **The update sources are shown but not yet editable from the
+  command line.** `sphinx update` names the two sources it
+  fetches from; changing that list from the CLI is later work.
+- **Boot and route changes never re-point anything by
+  themselves.** The resolved engagement is runtime state on the
+  one link that carried the default route when you engaged — a
+  reboot, a link bounce, or the default route moving to another
+  connection ends it. What happens then is a *resumption*, and it
+  is honest about being one: Sphinx remembers that protection
+  was on (an intent record written only when a change was
+  verified), the service's journal notes the leftover at start,
+  and `sphinx status` shows the saved record waiting and names
+  your choice — `sudo sphinx engage` turns Sphinx back on
+  (against the saved settings; on the connection that carries
+  your traffic now, if that changed), `sudo sphinx restore` puts
+  the saved settings back and finishes turning it off. Nothing
+  is ever re-pointed or restored behind your back, and status
+  shows a leftover (a saved record waiting), never a false "on."
 
 ## The honest limit
 
@@ -63,7 +67,7 @@ Build the package from a checkout of this repository:
 
 ```sh
 sh debian/packaging/build-deb.sh        # writes debian/dist/
-sudo apt install ./debian/dist/sphinx_0.1.0_all.deb
+sudo apt install ./debian/dist/sphinx_0.2.0_all.deb
 ```
 
 The package is architecture `all` (pure Python, standard library
@@ -81,6 +85,73 @@ sudo sphinx engage                   # point this machine's DNS at it
 sphinx status                        # the truth, from real reads
 sudo sphinx restore                  # turn it off, settings back exactly
 ```
+
+## List updates
+
+```sh
+sudo sphinx update
+```
+
+`sphinx update` downloads fresh copies of the two blocklists
+Sphinx shows — **StevenBlack unified** (ads & malware) and
+**HaGeZi Multi LIGHT** (ads, trackers, telemetry) — under the
+shared spec's rules:
+
+- **HTTPS only, every hop.** Redirects are followed by hand and
+  each one is checked: a hop that drops to plain HTTP fails the
+  download.
+- **Every list is parsed and sanity-checked** (at least 1,000
+  domains) before it may replace anything, and the combined set
+  must pass the same gate on unique domains.
+- **All-or-nothing.** If any source fails, the update has
+  failed: nothing is swapped, every source keeps the copy it
+  had, and the "last updated" time Sphinx reports does not move.
+- **Manual only.** Updates happen when you run the command —
+  never on a timer, never in the background.
+
+Downloaded lists, while valid, are the blocklist; the bundled
+list stays underneath them as the floor, so no update can leave
+the filter listless. The running service notices new lists (and
+rule edits, and profile switches) on its own and uses them from
+the next question it answers — no restart.
+
+## Your own rules, and profiles
+
+```sh
+sudo sphinx allow add example.com      # never block this name (or its subdomains)
+sudo sphinx block add tracker.example.net
+sphinx allow list                      # reading needs no sudo
+sudo sphinx block remove tracker.example.net
+```
+
+Your rules live in `/var/lib/sphinx`, edited by the command as
+root and read by the service. An allowlist entry wins over every
+list, per the spec; a custom block entry blocks on top of every
+list. Entries go through the same checks the list parser uses —
+a single word, an IP address, or a reserved local name is
+refused with the reason, because such an entry could never do
+what it appears to do. List updates never overwrite your rules,
+and your rules are never query history: the query log stays in
+the service's memory only, and nothing in this directory records
+what was asked.
+
+**Profiles** are named sets of those two rule lists:
+
+```sh
+sudo sphinx profile save Home     # snapshot the current rules as "Home" (now active)
+sudo sphinx profile use Quiet     # switch the live rules to "Quiet"
+sphinx profile list               # what exists, and which is active
+sudo sphinx profile delete Quiet
+```
+
+While a profile is active, editing your rules edits the profile
+too — what it says is what it does. Switching applies the chosen
+profile's rules to the running filter without ever modifying the
+profile you switched *from*. A profile holds **only your rules** —
+never the blocklists or their sources — so switching profiles
+cannot change which lists Sphinx questions with. Deleting a
+profile deletes only the snapshot; the rules in force stay as
+they are.
 
 ## How turning it on works (the restore discipline)
 
@@ -112,7 +183,7 @@ Turning a machine's DNS over to anything is a trust exercise, so
    removed, and stops the removal if the restore cannot be
    verified.
 
-### Which machines Phase 1 can turn on
+### Which machines Sphinx can turn on
 
 - **A plain `/etc/resolv.conf`** that you maintain yourself (the
   "direct" setup). Engage rewrites it — keeping every
@@ -127,8 +198,12 @@ Turning a machine's DNS over to anything is a trust exercise, so
   route when you engaged. If the machine's route later moves to a
   different connection (say, Ethernet unplugged and Wi-Fi takes
   over), that connection was never pointed at Sphinx — status
-  shows a leftover rather than pretend the new route is filtered,
-  and `sudo sphinx engage` on the new connection is the fix.
+  shows a leftover rather than pretend the new route is filtered.
+  `sudo sphinx engage` is the fix, and it knows the route moved:
+  it undoes Sphinx's (now inactive) setting on the old connection,
+  saves the *new* connection's own settings, and only then points
+  the new connection — the same save-then-point discipline as a
+  first engage, never a quiet re-point.
   Two things about this, stated plainly:
   - Sphinx never binds 127.0.0.53 and never touches the stub file:
     that address and file are resolved's own. There is no port
@@ -145,7 +220,7 @@ Turning a machine's DNS over to anything is a trust exercise, so
     there is no honest way to promise them back.
 - **NetworkManager-managed machines are refused, plainly.**
   NetworkManager owns and re-asserts the DNS settings there;
-  Phase 1 does not fight it, and will not pretend it can promise an
+  Sphinx does not fight it, and will not pretend it can promise an
   exact restore. The same applies to resolver files generated by
   other tools (dhcpcd, resolvconf) and to any setup Sphinx does not
   recognize: engage changes nothing and explains why.
@@ -155,13 +230,17 @@ Turning a machine's DNS over to anything is a trust exercise, so
 `sphinx.service` runs the daemon as a dedicated `sphinx` user with
 exactly one capability (CAP_NET_BIND_SERVICE, so it can use port
 53), `NoNewPrivileges`, `ProtectSystem=strict`, and the rest of
-systemd's standard hardening. The daemon needs no writable disk:
-its lists are read-only, its query log lives only in memory
-(capped at 500 entries, never written to disk, never sent
-anywhere), and its counters live in memory too. The command talks
-to the daemon through a control socket in `/run/sphinx/` to prove
-liveness and read the real counters — `sphinx status` reports what
-the daemon itself says, and says "not answering" when it isn't.
+systemd's standard hardening. The daemon writes nothing to disk:
+it *reads* its working set from `/var/lib/sphinx` (downloaded
+lists over the bundled floor, your rules on top) and watches
+those files, reloading the whole set when they change; its query
+log lives only in memory (capped at 500 entries, never written
+to disk, never sent anywhere), and its counters live in memory
+too. Only the command, as root, writes the state directory. The
+command talks to the daemon through a control socket in
+`/run/sphinx/` to prove liveness and read the real counters —
+`sphinx status` reports what the daemon itself says, and says
+"not answering" when it isn't.
 The socket is deliberately not open to every local user (mode
 0660, the daemon's user/group and root), so an unprivileged
 `sphinx status` shows the service and resolver state from real
@@ -185,9 +264,10 @@ sudo apt remove sphinx     # restores your DNS first — and verifies it
 sudo apt purge sphinx      # also removes the saved state and the user
 ```
 
-A plain remove leaves `/var/lib/sphinx` (the saved record and the
-recorded on/off decision) in place, so a reinstall picks up where
-it left off; purge deletes it. Your `/etc/sphinx/sphinx.conf`
+A plain remove leaves `/var/lib/sphinx` (the saved DNS record,
+the recorded on/off decision, downloaded lists, your rules, and
+your profiles) in place, so a reinstall picks up where it left
+off; purge deletes it. Your `/etc/sphinx/sphinx.conf`
 edits are a conffile: kept on remove, removed on purge, by dpkg's
 usual rules. Two removal details, stated plainly: the pre-removal
 restore runs only when a saved record actually exists (a machine
@@ -204,21 +284,23 @@ Sphinx off and puts your saved settings back — run
 debian/
   src/sphinx_deb/
     core/       the shared brain: lists, wire format, forwarding,
-                the filter engine (pure Python, stdlib only)
+                the filter engine, the store, the updater, the
+                profile model (pure Python, stdlib only)
     resolver/   stack detection, the engage/restore guard, proofs
     daemon.py   the service entry point
     control.py  the daemon's local control socket
     cli.py      the sphinx command
   tests/        the suite (core parity, forwarding discipline,
-                guard on fakes, packaging) — never touches the
-                host's real resolver configuration
+                guard on fakes, store/updater/profiles, CLI,
+                packaging) — never touches the host's real
+                resolver configuration
   packaging/    dpkg-deb build, control metadata, maintainer
                 scripts, the systemd unit, the default config
 ```
 
 ## Status
 
-Debian Phase 1, version **0.1.0**. The suite and the package build
+Debian Phase 2, version **0.2.0**. The suite and the package build
 run locally and in CI (`.github/workflows/sphinx-debian.yml`).
 
 **Not yet proven on a real machine** — this phase was built and

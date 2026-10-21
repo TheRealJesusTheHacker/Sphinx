@@ -409,6 +409,48 @@ Starts after the Windows edition lands.
   renewal mid-engagement, route change, install/remove cycle on
   Debian + Kali/Parrot) remain release-gate work.
 
+### Debian Phase 2 — FILTER-SPEC parity, resumption (landed)
+
+- **The update path** (`sudo sphinx update`): the spec's two
+  default sources, HTTPS only, redirects followed by hand with
+  every hop vetted, the ≥1,000-domain gate per source and again
+  on the merged set's unique domains, atomic temp-and-rename
+  swaps, manual only — nothing fetches in the background, ever.
+  Failure is all-or-nothing: any source failing means nothing
+  swapped and the last-updated time untouched. Downloaded lists
+  take over from the bundled floor only while valid; the floor
+  means an update can never leave the daemon listless.
+- **Stores + CLI editing:** allowlist and custom block entries
+  persist under /var/lib/sphinx (root edits via `sphinx allow` /
+  `sphinx block`; the daemon, as the unprivileged sphinx user,
+  only reads). The store's scalars live in store.json — the
+  guard's intent keeps state.json; neither overwrites the
+  other. The daemon watches the store's files and reloads the
+  whole working set on change: updates, edits, and profile
+  switches land in the running filter without a restart,
+  proven at the engine's decision point by tests.
+- **Profiles parity:** the spec model (allowlist + custom
+  entries; lists and sources shared — a switch is never a
+  disguised list change) with the audited disciplines:
+  write-through from every save path, switch with sync off +
+  fresh-read marker, both snapshots byte-intact across a
+  switch, delete removes only the snapshot.
+- **Boot / route-change resumption — decided:** intent (written
+  only at verified transitions) + a saved record + live DNS no
+  longer at the filter is reconciled honestly: surfaced by the
+  daemon's journal at start and by `sphinx status`, and
+  performed only by the user's `sudo sphinx engage` through the
+  ordinary prove-then-point path — against the record (never
+  re-saved) on the same link, retargeted (stale override undone
+  and verified, new link's originals saved and verified) when
+  the default route moved. An upgrade still disengages and
+  records intent off, so upgrades are never auto-resumed.
+- **Not in this phase, stated plainly:** editing the update
+  source list from the CLI; NetworkManager machines remain a
+  protected refusal; no graphical interface. The real-machine
+  proofs above remain release-gate work, alongside this
+  phase's own independent audit.
+
 ## Further platforms
 
 As feasible after the three editions above, and only where the same
