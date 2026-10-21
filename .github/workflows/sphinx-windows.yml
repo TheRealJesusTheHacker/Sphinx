@@ -1,0 +1,64 @@
+name: Sphinx — Windows edition
+
+# The Windows edition's build gate: the pytest suite plus a real
+# PyInstaller build on windows-latest. (The dev VM is Linux and
+# cannot produce a Windows exe; this workflow is the build proof.)
+on:
+  push:
+    paths:
+      - "windows/**"
+      - ".github/workflows/sphinx-windows.yml"
+  pull_request:
+    paths:
+      - "windows/**"
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run the test suite
+        run: python -m pytest tests -q
+
+      - name: Build the one-file exe
+        run: >-
+          python -m PyInstaller packaging/Sphinx.spec --noconfirm
+          --distpath dist --workpath build/pyi
+
+      - name: Assemble the portable edition and checksums
+        shell: pwsh
+        run: |
+          $portable = Join-Path (Get-Location) 'dist\SphinxPortable'
+          New-Item -ItemType Directory -Force $portable | Out-Null
+          Copy-Item 'dist\Sphinx.exe' $portable
+          New-Item -ItemType File -Force (Join-Path $portable 'portable.txt') | Out-Null
+          Compress-Archive -Path $portable -DestinationPath 'dist\SphinxPortable.zip' -Force
+          $lines = @()
+          foreach ($f in @('dist\Sphinx.exe', 'dist\SphinxPortable.zip')) {
+            $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+            $lines += "$hash  $(Split-Path $f -Leaf)"
+          }
+          $lines | Set-Content 'dist\SHA256SUMS.txt' -Encoding ascii
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sphinx-windows
+          path: |
+            windows/dist/Sphinx.exe
+            windows/dist/SphinxPortable.zip
+            windows/dist/SHA256SUMS.txt
