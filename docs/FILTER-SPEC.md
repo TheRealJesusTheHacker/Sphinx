@@ -90,7 +90,11 @@ these rules:
 
 - Sources are **HTTPS only**, and they are **visible and editable** by
   the user. An edition fetches only from the sources it shows, and
-  only when the user asks (no silent background fetching).
+  only when the user asks (no silent background fetching). A redirect
+  during a download is followed only while **every hop stays on
+  HTTPS**; a downgrade to plain HTTP fails the download (the list is a
+  security control — it must not be substitutable by anyone on the
+  network path).
 - A download is **fully parsed and sanity-checked before it may
   replace anything**: the parsed list must hold at least **1,000
   domains**. An error page, a truncated file, or an empty response

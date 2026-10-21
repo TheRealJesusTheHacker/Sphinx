@@ -51,4 +51,32 @@ object ListValidation {
         val parsed = Blocklist.fromLines(lines)
         return if (isAcceptable(parsed, minDomains)) parsed else null
     }
+
+    /**
+     * Where a redirect may take a list download. [location] (a raw
+     * `Location` header value) is resolved against [currentUrl]; the
+     * result is returned only if the download stays on HTTPS.
+     *
+     * Sources are HTTPS-only (see [ListSource.isAcceptableUrl]), and
+     * that has to hold for *every hop*: a redirect that downgrades to
+     * plain HTTP would hand the list to anyone on the network path,
+     * who could substitute a different real-shaped list (attacker
+     * domains left unblocked, or innocent domains blockaded). The
+     * platform's automatic redirect handling is not trusted to refuse
+     * a downgrade on every OS version, so editions follow redirects
+     * by hand through this check. A redirect to another HTTPS host
+     * (a CDN, a mirror) is fine. Null — a missing or unusable
+     * Location, or any non-HTTPS hop — fails the download, and a
+     * failed download changes nothing.
+     */
+    fun redirectTarget(currentUrl: String, location: String?): String? {
+        val target = location?.trim().orEmpty()
+        if (target.isEmpty()) return null
+        val resolved = try {
+            java.net.URL(java.net.URL(currentUrl), target).toString()
+        } catch (e: Exception) {
+            return null
+        }
+        return if (ListSource.isAcceptableUrl(resolved)) resolved else null
+    }
 }

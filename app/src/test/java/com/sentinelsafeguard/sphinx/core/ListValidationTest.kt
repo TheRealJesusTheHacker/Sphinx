@@ -49,6 +49,36 @@ class ListValidationTest {
     }
 
     @Test
+    fun theGateCountsUniqueDomainsNotLines() {
+        // 5,000 lines but only 10 distinct names: a flood of duplicates
+        // must not inflate a junk download past the sanity floor.
+        val dupes = (1..5_000).asSequence().map { "host${it % 10}.example.com" }
+        assertNull(ListValidation.parseAndValidate(dupes))
+    }
+
+    @Test
+    fun redirectsMustStayOnHttps() {
+        val base = "https://lists.example.com/hosts.txt"
+        // Ordinary hops are fine: same host, relative path, another
+        // HTTPS host (a CDN or mirror).
+        assertEquals(
+            "https://lists.example.com/v2/hosts.txt",
+            ListValidation.redirectTarget(base, "/v2/hosts.txt"),
+        )
+        assertEquals(
+            "https://cdn.example.net/hosts.txt",
+            ListValidation.redirectTarget(base, "https://cdn.example.net/hosts.txt"),
+        )
+        // A downgrade to plain HTTP fails the download, as does a
+        // scheme-relative hop onto a non-HTTPS base resolution.
+        assertNull(ListValidation.redirectTarget(base, "http://lists.example.com/hosts.txt"))
+        assertNull(ListValidation.redirectTarget(base, "ftp://lists.example.com/hosts.txt"))
+        // Missing or unusable Location headers fail too.
+        assertNull(ListValidation.redirectTarget(base, null))
+        assertNull(ListValidation.redirectTarget(base, "   "))
+    }
+
+    @Test
     fun defaultSourcesAreHttpsAndReputable() {
         assertTrue(ListValidation.DEFAULT_MIN_DOMAINS >= 1_000)
         assertTrue(ListSource.DEFAULTS.isNotEmpty())
