@@ -13,19 +13,46 @@ from sphinx_win.core.store import Store  # noqa: E402
 from sphinx_win.dnsmgmt.base import AdapterDns  # noqa: E402
 from sphinx_win.dnsmgmt.fake import FakeDnsManager  # noqa: E402
 
+ADAPTERS = [
+    AdapterDns("Wi-Fi", "IPv4", ["192.168.1.1"]),
+    AdapterDns("Wi-Fi", "IPv6", []),
+]
 
-def test_main_window_constructs(tmp_path):
+
+class FakeServer:
+    def __init__(self, engine):
+        self.engine = engine
+        self.started = False
+        self.stopped = False
+
+    def start(self):
+        self.started = True
+        return [("127.0.0.1", 53), ("::1", 53)]
+
+    def answers_on(self, address, timeout=2.0):
+        return True
+
+    def stop(self):
+        self.stopped = True
+
+
+def make_window(tmp_path, elevated=True):
     from PySide6.QtWidgets import QApplication
 
     from sphinx_win.app.tray_app import MainWindow
 
     app = QApplication.instance() or QApplication([])
     store = Store(tmp_path / "data")
-    manager = FakeDnsManager(
-        [AdapterDns("Wi-Fi", "IPv4", ["192.168.1.1"])], elevated=True
+    manager = FakeDnsManager(ADAPTERS, elevated=elevated)
+    controller = SphinxController(
+        store, manager, tmp_path / "data", server_factory=FakeServer
     )
-    controller = SphinxController(store, manager, tmp_path / "data")
-    window = MainWindow(controller, elevated=True)
+    window = MainWindow(controller, elevated=elevated)
+    return app, window, controller, manager
+
+
+def test_main_window_constructs(tmp_path):
+    app, window, controller, manager = make_window(tmp_path)
     window.show()
     app.processEvents()
     assert window.windowTitle().startswith("Sphinx")
@@ -33,3 +60,118 @@ def test_main_window_constructs(tmp_path):
     assert window.toggle_button.isEnabled()
     window.close()
     app.processEvents()
+
+
+class TestTrayHost:
+    def build_host(self, tmp_path, elevated=True, **host_kw):
+        from sphinx_win.app.host import LaunchOptions
+        from sphinx_win.app.tray_app import TrayHost
+
+        app, window, controller, manager = make_window(
+            tmp_path, elevated=elevated
+        )
+        host = TrayHost(
+            window,
+            controller,
+            elevated=elevated,
+            launch=host_kw.pop("launch", LaunchOptions()),
+            **host_kw,
+        )
+        return app, window, controller, manager, host
+
+    def test_host_attaches_and_reads_autostart_state(self, tmp_path):
+        from sphinx_win.app.autostart import AutostartManager
+
+        class DictRegistry:
+            def __init__(self):
+                self.values = {}
+
+            def get_value(self, name):
+                return self.values.get(name)
+
+            def set_value(self, name, value):
+                self.values[name] = value
+
+            def delete_value(self, name):
+                self.values.pop(name, None)
+
+        registry = DictRegistry()
+        mgr = AutostartManager(registry, command='"X" --autostart')
+        app, window, controller, manager, host = self.build_host(
+            tmp_path, autostart_manager=mgr
+        )
+        assert window._host is host
+        assert host.autostart_state() is False
+        assert window.autostart_checkbox.isChecked() is False
+        assert host.set_autostart(True) is True
+        assert controller.store.autostart_enabled() is True
+        assert host.set_autostart(False) is False
+
+    def test_close_goes_to_the_tray_and_stops_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        from PySide6.QtGui import QCloseEvent
+
+        app, window, controller, manager, host = self.build_host(tmp_path)
+        controller.start()
+        assert controller.running
+        monkeypatch.setattr(host, "tray_available", lambda: True)
+        event = QCloseEvent()
+        window.closeEvent(event)
+        assert not event.isAccepted()  # hidden, not closed
+        assert controller.running  # protection untouched
+
+    def test_quit_runs_the_audited_stop(self, tmp_path):
+        quit_calls = []
+        app, window, controller, manager, host = self.build_host(
+            tmp_path, quit_fn=lambda: quit_calls.append(True)
+        )
+        controller.start()
+        assert host.quit() is True
+        assert quit_calls == [True]
+        assert not controller.running
+        assert manager.get_dns("Wi-Fi", "IPv4") == ["192.168.1.1"]
+
+    def test_quit_refuses_when_the_restore_fails(
+        self, tmp_path, monkeypatch
+    ):
+        import sphinx_win.app.tray_app as tray_app
+
+        monkeypatch.setattr(
+            tray_app.QMessageBox, "warning", staticmethod(lambda *a, **k: 0)
+        )
+        quit_calls = []
+        app, window, controller, manager, host = self.build_host(
+            tmp_path, quit_fn=lambda: quit_calls.append(True)
+        )
+        controller.start()
+        manager.fail_on_set.add(("Wi-Fi", "IPv4"))
+        assert host.quit() is False
+        assert quit_calls == []  # never quit over a failed restore
+        assert controller.running
+
+    def test_startup_resumes_an_existing_engagement(self, tmp_path):
+        app, window, controller, manager, host = self.build_host(tmp_path)
+        controller.start()  # engage, as the previous run did
+        controller.server.stop()
+        controller.running = False
+        outcome = host.run_startup()
+        assert controller.running  # RESUME re-served the engagement
+        assert not outcome.exit_now and not outcome.attention
+
+    def test_startup_needs_admin_without_a_prompt_loop(self, tmp_path):
+        from sphinx_win.app.host import LaunchOptions
+
+        elevate_calls = []
+        app, window, controller, manager, host = self.build_host(
+            tmp_path,
+            elevated=False,
+            launch=LaunchOptions(autostart=True),
+            elevate_fn=lambda args: elevate_calls.append(args) or False,
+        )
+        controller.store.set_protection_intent(True)
+        outcome = host.run_startup()
+        assert host.needs_admin
+        assert not outcome.exit_now
+        assert len(elevate_calls) == 1  # asked once, then waits
+        assert not controller.running
