@@ -145,6 +145,45 @@ class TestProofHygiene:
         assert engine.allowed_count == 0
         assert len(engine.query_log) == 0
 
+    def test_proof_timeout_exceeds_the_forwarders_worst_case(self):
+        # W-6: the proof queries an allowed name, so it only passes
+        # when the upstream round trip returns in time. The
+        # forwarder's worst case is one full timeout per resolver;
+        # a proof timeout at or below that can fail a healthy
+        # filter on a slow-upstream machine.
+        import inspect
+
+        from sphinx_win.core.forwarder import (
+            UPSTREAM_RESOLVERS,
+            UPSTREAM_TIMEOUT_S,
+        )
+
+        default = inspect.signature(
+            DnsFilterServer.answers_on
+        ).parameters["timeout"].default
+        assert default > len(UPSTREAM_RESOLVERS) * UPSTREAM_TIMEOUT_S
+
+    @requires_udp_replies
+    def test_answers_on_survives_a_slow_upstream(self):
+        # The live half of W-6: an upstream that answers correctly
+        # but slowly (past the old 2-second proof timeout) must
+        # still prove — DNS is engaged only after this passes, and
+        # a healthy filter must not be failed by upstream latency.
+        import time
+
+        def slow_forward(data):
+            time.sleep(3.0)
+            return build_response_for(data)
+
+        engine, _ = make_engine(forwarder=slow_forward)
+        port = free_port_pair()
+        server = DnsFilterServer(engine, port=port)
+        server.start()
+        try:
+            assert server.answers_on("127.0.0.1")  # default timeout
+        finally:
+            server.stop()
+
     def test_dispatch_consumes_the_proof_token_once(self):
         engine, _ = make_engine()
         server = DnsFilterServer(engine, port=free_port_pair())
