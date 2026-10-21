@@ -213,4 +213,28 @@ class ForwarderTest {
         assertTrue(DnsForwarder.isTruncated(response(q, truncated = true)))
         assertTrue(!DnsForwarder.isTruncated(response(q)))
     }
+
+    // --- A-2: the per-attempt deadline bounds the whole wait. ---
+
+    @Test(timeout = 15000)
+    fun mismatchedDatagramCannotStretchAttemptPastDeadline() {
+        val fake = fakeUdp()
+        val q = query("example.com")
+        fake.start { s, data, addr, port ->
+            Thread.sleep(1200)
+            val spoof = response(data)
+            spoof[0] = 0xDE.toByte(); spoof[1] = 0xAD.toByte()
+            try { sendTo(s, spoof, addr, port) } catch (e: Exception) { }
+            // Then silence: a per-receive timeout would let the next
+            // receive run a full timeout past the deadline.
+        }
+        val start = System.nanoTime()
+        val answer = DnsForwarder.forwardQuery(q, listOf("127.0.0.1"), 2000, fake.port)
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+        assertNull(answer)
+        assertTrue(
+            "attempt took ${elapsedMs} ms with a 2000 ms budget and one late mismatch",
+            elapsedMs < 2600,
+        )
+    }
 }

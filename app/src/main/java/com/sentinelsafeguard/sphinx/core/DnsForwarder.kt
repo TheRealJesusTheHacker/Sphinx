@@ -24,6 +24,9 @@ import java.net.SocketTimeoutException
  *   delivers datagrams that actually come from it, and a response
  *   counts as the answer only if its DNS ID matches the query's ID
  *   with the response (QR) bit set. Anything else is ignored.
+ * - The 3-second budget covers the whole wait, not each datagram:
+ *   the receive timeout is re-armed to the remaining budget before
+ *   every receive, so mismatched datagrams cannot stretch it.
  * - A truncated (TC) UDP answer is completed over TCP to the same
  *   resolver inside the same deadline (RFC 7766), exactly as the
  *   Python editions do; if TCP fails, the truncated answer is
@@ -71,6 +74,20 @@ object DnsForwarder {
                 val buffer = ByteArray(MAX_PACKET)
                 val deadlineNanos = System.nanoTime() + timeoutMs * 1_000_000L
                 while (true) {
+                    // The budget covers the whole wait, not each
+                    // datagram: soTimeout is per-receive, so re-arm
+                    // it to the *remaining* budget before every
+                    // receive — a stream of mismatched datagrams
+                    // then cannot stretch this attempt past the
+                    // deadline (the Python editions' discipline).
+                    val remainingMs =
+                        (deadlineNanos - System.nanoTime()) / 1_000_000L
+                    if (remainingMs <= 0) {
+                        throw SocketTimeoutException("no matching response in time")
+                    }
+                    socket.soTimeout =
+                        remainingMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                            .coerceAtLeast(1)
                     val response = DatagramPacket(buffer, buffer.size)
                     socket.receive(response)
                     if (isAnswer(buffer, response.length, queryId)) {
@@ -96,9 +113,8 @@ object DnsForwarder {
                         }
                         return accepted
                     }
-                    if (System.nanoTime() > deadlineNanos) {
-                        throw SocketTimeoutException("no matching response in time")
-                    }
+                    // Not our answer: ignore it and keep waiting —
+                    // the re-armed timeout above bounds the whole wait.
                 }
             } catch (e: Exception) {
                 // Timeout or socket error: try the next resolver.
