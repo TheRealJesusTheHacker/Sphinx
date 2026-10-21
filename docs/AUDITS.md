@@ -8,6 +8,191 @@ never merely to make a report prettier).
 
 ---
 
+## Windows Phase 3 audit — profiles parity and the palette HUD (2026-10-21)
+
+Scope: the Windows edition's Phase 3 (commits ae2535c3..c9ea4f0d):
+the profiles port (`core/profiles.py`, the store's profile
+integration, the window's switch path), the palette
+(`app/theme.py`, the tray icon's three states), and the phase's
+presentation-only claim over every Phase 1–2 behavior. Plus the
+build crew's flagged item: the test suite's intermittent
+post-summary exit (green pytest, then a crash at interpreter
+shutdown).
+
+Method: full read of the Phase 3 diff (local tree verified
+blob-identical to remote HEAD c9ea4f0d, 103 blobs; the diff itself
+verified through the API to be exactly 15 files — no `dnsmgmt`
+file, and no Phase 1–2 audited behavior file, appears in it; the
+tray and store diffs were read hunk by hunk against their Phase 2
+versions). The pytest suite as baseline (reproduced: 177 passed /
+3 skipped on system Python, 187 passed / 1 skipped in the PySide6
+environment). Independent probes beyond the suite: a
+switch-while-running end-to-end pass against a live controller;
+simulated process death injected after each individual write of
+the switch sequence (and mid-rename) with byte-level comparison
+of the profiles file; a death injected into the write-through
+sync; garbage/duplicate/malformed profile files; an
+independently implemented WCAG contrast computation and a
+no-purple scan over every color the phase ships; and a
+product-shaped lifecycle probe (one window, one host, engaged,
+quit through the application) run repeatedly.
+
+### Fixed
+
+1. **LOW (test infrastructure) — The suite's post-summary crash:
+   UI tests left live Qt objects behind, and shutdown destroyed
+   them in arbitrary order.** The build crew flagged an
+   intermittent nonzero exit after a green summary (segfault /
+   abort at interpreter shutdown), correlated with window-heavy
+   UI tests and latent since Phase 1–2. This audit reproduced it
+   deterministically: `test_app_smoke.py` + `test_profiles_ui.py`
+   together aborted 3/3 runs (glibc heap corruption reported
+   after the green summary) and the full PySide6 suite crashed
+   on every pre-fix attempt, while each UI file alone exited
+   clean. Root cause: the smoke tests build MainWindows and
+   TrayHosts and drop their references — the windows stay alive
+   in Qt's registries for the rest of the process, one-second
+   refresh timers armed, tray icons and menus attached. Later
+   tests pump the event loop into those orphans, and interpreter
+   shutdown destroys the accumulated QObjects in arbitrary
+   order. **Not a product defect:** the shipped app's lifecycle —
+   exactly one window and one host, held for the process's life,
+   quit through the application — was probed directly and
+   exited clean 5/5, engaged, with the refresh timer firing.
+   Fix: an autouse fixture in `tests/conftest.py` destroys every
+   top-level widget after each test (child timers stopped, tray
+   context menus released, `deleteLater` with the deferred
+   deletes pumped dry), so no Qt object outlives its test.
+   Destruction deliberately bypasses `closeEvent` — the close
+   discipline is product behavior, exercised directly by the
+   tests that call it; re-entering it in teardown could raise
+   message boxes mid-teardown. Evidence after the fix: the
+   previously 3/3-aborting file pair is 3/3 clean; the full
+   PySide6 suite ran **5 consecutive clean exits** (187 passed,
+   1 skipped each); the system-Python run is unchanged
+   (177 passed, 3 skipped). *(tests/conftest.py)*
+
+### Verified clean (probed independently, not taken on the crew's word)
+
+- **Switch integrity — the Android Phase 4 findings, re-probed.**
+  A completed switch changes exactly one line of `profiles.txt`
+  (the active marker); both snapshots are byte-identical before
+  and after. Simulated process death after 0, 1, or 2 of the
+  switch's three writes (and a death at the marker write's
+  rename) leaves `profiles.txt` byte-identical and both
+  snapshots whole; the live files hold at most one whole state
+  per file, never a blend within a file. The discipline the crew
+  claimed is the discipline the code runs: live writes with the
+  write-through sync off, the marker saved from a fresh read.
+- **A switch reaches the running filter completely.** With the
+  controller engaged, switch + the ordinary reload: the
+  incoming profile's custom entry is sinkholed by the live
+  engine, its allowlist flips decisions, and the outgoing
+  profile's entries leave no residue in the live lists.
+- **Write-through completeness.** Grep-proved: the only callers
+  of the two live-rule saves in the tree are the window's two
+  editor handlers (sync on, the default) and the switch's own
+  live-state write (sync off); nothing outside the store touches
+  the rule files. A death injected into the sync itself degrades
+  honestly: the live edit stands, the profile keeps its previous
+  snapshot, nothing is half-written (single atomic profiles
+  write).
+- **Malformed data degrades per the rails.** Duplicate profile
+  sections are first-wins; an active marker naming a missing
+  profile is dropped; entries inside profiles pass through the
+  shared parser rails (no single labels, no reserved names, no
+  IP literals); garbage lines are ignored; a garbage profiles
+  file never touches the live rules. Deleting the active
+  profile clears only the marker — the live rules stay in force.
+  Name rules are at parity with Android (trimmed, 1–40
+  characters, no category-Cc control characters — Android's
+  `isISOControl` is exactly that set).
+- **Palette.** All 13 pinned text pairings re-measured with an
+  independent implementation: 4.99:1–14.82:1, every one at or
+  above WCAG AA 4.5:1; the stylesheet's unpinned text pairings
+  (disabled text, details on panels) also pass. An independent
+  no-purple scan over the theme constants and every hex literal
+  in the app's UI files found no violet hues (all hues sit in
+  the 3°–41° red-to-gold band). The danger red is the fleet
+  standard `#e5534b`.
+- **Tray icon states come from the read state.** The attention
+  state is computed in the refresh from the throttled (15 s)
+  real read — LEFTOVER or UNKNOWN, or running while the read
+  state is not ENGAGED — never from the running flag alone; the
+  status text, the throttle, and the refresh path are unmoved
+  Phase 1–2 code.
+- **Presentation-only, proven.** The behavior-bearing Phase 1–2
+  modules (controller, host, autostart, `dnsmgmt/`, server,
+  updater, validation, blocklist) are absent from the Phase 3
+  diff — byte-identical. The files that did change moved only
+  as claimed: `main.py` applies the stylesheet; the installer
+  script changed only its version define (the two-writer
+  Run-value pin still passes, unmodified); `tray_app.py` gained
+  the profiles section, the palette icon states, and the
+  attention computation — close-to-tray, the refused quit, and
+  the refresh discipline are untouched hunks.
+
+### Documented and ignored
+
+- **Crash-consistency of a switch is per-file, not
+  transactional — by design, and it degrades safely.** Death
+  mid-switch can leave the live allowlist from the incoming
+  profile beside the live custom entries from the outgoing one,
+  under the outgoing marker. Nothing is corrupted, no snapshot
+  is lost, and the next switch or edit restores coherence; the
+  marker always names the profile whose switch last completed.
+  A transactional multi-file commit would be machinery out of
+  proportion to a two-file rule state whose worst case is a
+  re-switch. Android has the identical property.
+- **A live edit whose write-through sync dies is not rolled
+  back** (probed above): the edit stands live, the profile
+  keeps the older snapshot until the next successful edit.
+  Same reasoning; the atomic profiles write means the failure
+  can only ever lose the newest edit's sync, never data.
+
+### CI and artifacts
+
+- **CI and artifacts for the audited HEAD:** the fix above is
+  commit `7686c51d`; the windows-latest run for it (39558932236)
+  is green — suite, the real-manager read smoke, PyInstaller,
+  portable assembly, installer build. The three artifacts were
+  re-downloaded and re-verified locally: SHA256SUMS match;
+  Sphinx.exe 50,756,462 B, a genuine x86-64 PE; SphinxSetup.exe
+  52,245,519 B, a genuine Inno Setup binary; SphinxPortable.zip
+  one folder (`SphinxPortable/`, with `portable.txt`) whose exe
+  is byte-identical to the standalone. The suite stands at 187
+  tests in the PySide6 environment, unchanged in count — the fix
+  is teardown, not new tests.
+
+### Verification ceiling, stated plainly
+
+Everything above is VM-level: offscreen Qt, fake DNS managers,
+simulated deaths. What this audit does not prove is the same set
+the earlier rounds parked at the release gate, unchanged by
+Phase 3: real-hardware behavior (the installer end-to-end, a
+real-DHCP engage → stop → automatic restore, the two-process
+instance timing, the tray on a real desktop), and the Android
+edition's one real-device smoke pass. The profiles code paths
+are exercised against the same store the real window drives,
+but a switch clicked on a real machine, under a real engaged
+filter, belongs to that same gate.
+
+### Verdict
+
+Phase 3 is what it claimed to be: profiles at true parity with
+Android — the Phase 4 audit's corruption scenario designed out
+and now independently probed shut — and a palette restyle that
+moved no behavior. The one finding was in the suite, not the
+product, and it is fixed with repeated-run evidence. **The
+Windows edition is feature-complete: profiles, palette, tray
+host, installer, and the audited filter are all landed and
+audited, and it is ready to enter its release gate alongside
+Android** — signed builds, published checksums, and the
+real-machine proofs both editions have parked there. The
+Debian edition is next per the roadmap.
+
+---
+
 ## Windows Phase 2 audit — tray host, start-at-sign-in, installer (2026-10-21)
 
 Scope: the Windows edition's Phase 2 (commits 660ca650..718f8c2d):
