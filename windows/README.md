@@ -4,20 +4,23 @@ The Windows edition of Sphinx: the same filtering brain as every
 edition (the shared rules in [../docs/FILTER-SPEC.md](../docs/FILTER-SPEC.md)),
 running as a local DNS filter on this machine.
 
-**Status: Phase 2 — the tray host, start-at-sign-in, and the
-installer, landed.** Phase 1's filter, list engine, system-DNS
-engagement with its restore discipline, and plain functional window
-exist and passed an independent audit (see
+**Status: Phase 3 — profiles parity and the Sphinx palette,
+landed.** Phase 1's filter, list engine, system-DNS engagement
+with its restore discipline, and plain functional window exist
+and passed an independent audit (see
 [../docs/AUDITS.md](../docs/AUDITS.md)). Phase 2 hosts all of it in
 a system-tray process so the filter no longer needs the window open,
 adds an opt-in start-at-sign-in under the recorded-intent
 discipline, and ships an installer alongside the portable edition.
-What does *not* exist yet: HUD polish, and a background Windows
-*service* (Phase 2's host is a tray process — the section below
-says why, plainly). The release gate in the roadmap (independent
-audit → fix → re-audit, signed builds, published checksums) has
-not run for this edition; nothing here is a finished public
-release.
+Phase 3 adds profiles at parity with the Android edition — named
+snapshots of your allowlist and your own block entries — and
+restyles the window and tray in Sphinx's own palette (basalt,
+sandstone, bronze-gold). What does *not* exist yet: a background
+Windows *service* (Phase 2's host is a tray process — the section
+below says why, plainly). The release gate in the roadmap
+(independent audit → fix → re-audit, signed builds, published
+checksums) has not run for this edition; nothing here is a
+finished public release.
 
 ## How it works
 
@@ -137,6 +140,48 @@ the edition's release gate, alongside the other real-Windows
 proofs — it has not happened yet, and this README won't pretend
 otherwise.
 
+## Profiles (Phase 3)
+
+The same profile mechanism as the Android edition
+([../docs/FILTER-SPEC.md](../docs/FILTER-SPEC.md), "Profiles"),
+over the rule state Windows has: a profile captures **your
+allowlist and your own block entries** under a name. The
+blocklists and their sources are *not* part of a profile — every
+profile questions with the same lists, so switching profiles can
+never become a disguised list change, and a list update never
+disturbs a profile. The disciplines are the audited ones: while
+a profile is active, edits in the two editors are written
+through to it, so it never silently drifts from the rules in
+force; switching writes the saved state into the live stores
+and applies it whole to the running filter, leaving the profile
+you switched *from* exactly as it was; deleting a profile
+removes only the saved copy — the rules in force stay as they
+are — and a damaged profiles file degrades to the profiles that
+still read, never to wiped rules.
+
+## The Sphinx palette
+
+Sphinx's identity, on every edition and surface: **basalt black,
+sandstone, bronze-gold** — the stone guardian in the desert. The
+values live in `src/sphinx_win/app/theme.py` (with every text
+pairing held at WCAG 4.5:1 or better by the test suite) and are
+recorded here so the Android polish and any future Toolkit card
+inherit the same identity:
+
+- Basalt black `#0f0d0a` (window), weathered stone `#171310`
+  (panels), raised stone `#211a12` (inputs, buttons)
+- Sandstone text `#ece0c6`, worn sandstone `#b3a284` (secondary)
+- Bronze-gold `#cf9a3e` (the accent), polished bronze `#eac987`
+  (bright detail), aged bronze `#6e521f` (primary actions)
+- Danger red `#e5534b` — the fleet's standard value, for the
+  states that genuinely need you, and nothing else
+
+No purple: that exception belongs to Beerus alone. The tray icon
+follows the machine's real state in the palette — dulled bronze
+while off, bronze-gold while on, red when something needs your
+decision (saved settings waiting, or DNS no longer pointing at a
+running filter).
+
 ## Lists
 
 The same brain-data as the Android edition: the bundled StevenBlack
@@ -192,6 +237,6 @@ all three builds on windows-latest for every change under
   standard administrator prompt when Sphinx starts at sign-in (see
   the Phase 2 section above). Declining it leaves protection off —
   never silently half-on — until you start Sphinx as administrator.
-- Per-app rules are an Android-edition feature (they ride on
-  Android's per-app VPN routing); the Windows Phase 1 scope is the
-  DNS filter the roadmap's Edition 2 section describes.
+- Per-app rules remain an Android-edition feature (they ride on
+  Android's per-app VPN routing). Profiles (Phase 3) cover the
+  rule state Windows has — the allowlist and your own entries.

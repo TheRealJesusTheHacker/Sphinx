@@ -300,10 +300,54 @@ Starts after the Android core lands.
   owned, each pinned by regression tests. Suite: 153 tests
   (PySide6 environment) at the Phase 2 HEAD.
 
-Still ahead for this edition: HUD polish in the fleet's final
-style, the release gate below (independent audit → fix → re-audit
-before any public release), and — only if the hosting trade ever
-changes — a true service host.
+### Windows Phase 3 — Profiles parity and HUD polish (landed)
+
+- **Profiles, the Android model over Windows rule state**
+  (`core/profiles.py`, the store, and the window's Profiles
+  section): a profile captures the allowlist and the custom
+  block entries — Windows has no per-app rules — while the
+  blocklists and their sources stay shared under every profile,
+  so a switch can never become a disguised list change. The
+  store mirrors the Android store's audited disciplines:
+  atomic storage; a malformed profiles file degrades to the
+  profiles that parse, never a wiped live ruleset; live edits
+  write through to the active profile from every save path; a
+  switch writes the snapshot into the live stores *without* the
+  write-through — the profile switched from is only read, the
+  Android Phase 4 audit's corruption scenario designed out from
+  the start — and the window applies the switch whole through
+  the controller's ordinary reload, so the running filter never
+  sits on a half-switched state. The pure model mirrors the
+  Android ProfilesTest cases: round-trip, garbage tolerance,
+  first-wins duplicates, the parser's rails on stored entries,
+  replace/delete/active semantics, name validation.
+- **HUD polish in Sphinx's own palette** (`app/theme.py`):
+  basalt black, sandstone, bronze-gold — the stone guardian,
+  recorded in windows/README.md as the identity the Android
+  polish and any Toolkit card inherit. One application
+  stylesheet in the fleet's shape (wordmark, stone panels, a
+  bronze primary action), every text pairing pinned at WCAG
+  4.5:1 or better by the suite, the danger red the fleet's
+  standard value, no purple. The tray icon follows the real
+  state in three palette states: dulled bronze off, bronze-gold
+  on, danger red for attention (a leftover or unrecorded
+  loopback waiting on the user, or a filter running while DNS
+  no longer points at it). Presentation only — no Phase 1–2
+  behavior moved: the status still comes from throttled real
+  reads, and close-to-tray, the refused quit, the one-UAC ask,
+  and the startup decision table are untouched.
+- **Packaging:** version 0.3.0 (package and installer kept in
+  step, as a test pins them). The installer's branding surfaces
+  are its name/publisher/version strings; a wizard image or an
+  embedded exe icon would need shipped binary assets and was
+  not taken on in this phase.
+- Suite: 187 tests in the PySide6 environment at the Phase 3
+  HEAD.
+
+Still ahead for this edition: the release gate below
+(independent audit → fix → re-audit before any public release),
+and — only if the hosting trade ever changes — a true service
+host.
 
 ## Edition 3 — Debian/Linux
 

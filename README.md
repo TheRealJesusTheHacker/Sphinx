@@ -131,9 +131,10 @@ the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md
    start-at-sign-in that resumes protection under the same intent
    discipline as the Android edition. One-file exe, a portable
    edition, and an installer whose uninstaller restores your DNS
-   settings before it removes anything. *In build — Phases 1–2
-   (core filter service; tray host, start-at-sign-in, installer)
-   have landed; see [windows/README.md](windows/README.md).*
+   settings before it removes anything. *In build — Phases 1–3
+   (core filter service; tray host, start-at-sign-in, installer;
+   profiles and the Sphinx palette) have landed; see
+   [windows/README.md](windows/README.md).*
 3. **Debian/Linux** — a local DNS-filter daemon (systemd service),
    shipped as a .deb. *Planned — not started.*
 4. Further platforms as feasible after those three.
