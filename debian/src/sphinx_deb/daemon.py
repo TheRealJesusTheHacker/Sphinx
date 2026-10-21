@@ -134,9 +134,20 @@ class LiveLists:
         for path in self._store.watched_files():
             try:
                 st = path.stat()
-                parts.append((str(path), st.st_mtime_ns, st.st_size))
+                # mtime + size alone can collide: a same-size edit
+                # whose mtime is set back (utime, a restore tool, a
+                # coarse timestamp) would be silently missed. The
+                # store's writes are temp-and-rename, so every real
+                # edit also changes the inode, and ctime — which no
+                # tool can set back — moves on any write or rename.
+                # Including both makes a missed edit require the
+                # file to be literally the same file (Debian
+                # Phase 2 audit).
+                parts.append(
+                    (str(path), st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns)
+                )
             except OSError:
-                parts.append((str(path), None, None))
+                parts.append((str(path), None, None, None, None))
         return tuple(parts)
 
     def current(self) -> LiveState:
