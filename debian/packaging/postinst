@@ -16,6 +16,14 @@ case "$1" in
         mkdir -p /var/lib/sphinx
         chown sphinx:sphinx /var/lib/sphinx
         chmod 0755 /var/lib/sphinx
+        # Downloaded list copies live here (written by
+        # 'sudo sphinx update', read by the service). The rule
+        # stores beside them are plain files the command creates
+        # on first edit; nothing here is query history — the query
+        # log is memory-only and never reaches this directory.
+        mkdir -p /var/lib/sphinx/lists
+        chown sphinx:sphinx /var/lib/sphinx/lists
+        chmod 0755 /var/lib/sphinx/lists
         if [ -d /run/systemd/system ]; then
             systemctl daemon-reload || true
         fi
