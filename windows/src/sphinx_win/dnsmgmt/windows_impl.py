@@ -7,6 +7,22 @@ Only adapters that are Up and carry a default route (0.0.0.0/0 or
 ::/0) count as "active" — the adapters actually serving the machine's
 connections. Loopback and disconnected adapters are never touched.
 
+**Configured vs. effective — the distinction this module lives
+on.** The DnsManager contract (see base.py) speaks of the
+*configured* servers: an empty list means "obtain DNS automatically
+(DHCP)". ``Get-DnsClientServerAddress`` cannot express that: it
+reports the *effective* servers — on a DHCP adapter, the addresses
+DHCP handed out — so reading it directly would record a DHCP
+snapshot as if it were a static configuration, and a later restore
+would pin those addresses statically instead of returning the
+adapter to automatic. The audit therefore reads what
+``Set-DnsClientServerAddress`` itself writes: the per-interface
+``NameServer`` registry value (Tcpip for IPv4, Tcpip6 for IPv6,
+under the interface's GUID key). Absent or empty = automatic; a
+comma/space-separated list = the static configuration. The cmdlet
+is still used to enumerate which adapters/families exist and for
+all writes; only the *meaning* of a read comes from the registry.
+
 This module imports cleanly on any platform (the Windows calls are
 made lazily, per operation); it can only do its work on Windows.
 """
@@ -14,13 +30,26 @@ from __future__ import annotations
 
 import ctypes
 import json
+import re
 import subprocess
 import sys
-from typing import List
+from typing import List, Optional
 
 from .base import FAMILY_V4, FAMILY_V6, AdapterDns
 
 _FAMILY_TO_PS = {FAMILY_V4: "IPv4", FAMILY_V6: "IPv6"}
+_FAMILY_TO_SERVICE = {FAMILY_V4: "Tcpip", FAMILY_V6: "Tcpip6"}
+
+
+def parse_nameserver_value(raw: Optional[str]) -> List[str]:
+    """Interpret a registry ``NameServer`` value: the adapter's
+    *configured* DNS servers. Absent/empty means the adapter obtains
+    DNS automatically (DHCP) — the empty list the DnsManager
+    contract promises. Static values are comma-separated (older
+    tooling sometimes space-separated)."""
+    if not raw:
+        return []
+    return [part for part in re.split(r"[,\s]+", raw.strip()) if part]
 
 
 def is_windows() -> bool:
@@ -80,13 +109,17 @@ $result = @()
 foreach ($alias in $aliases) {
   $adapter = Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue
   if ($null -eq $adapter -or $adapter.Status -ne 'Up') { continue }
+  $guid = $adapter.InterfaceGuid.ToString('B')
   foreach ($family in @('IPv4','IPv6')) {
     $entry = Get-DnsClientServerAddress -InterfaceAlias $alias -AddressFamily $family -ErrorAction SilentlyContinue
     if ($null -ne $entry) {
+      $svc = if ($family -eq 'IPv4') { 'Tcpip' } else { 'Tcpip6' }
+      $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc\Parameters\Interfaces\$guid"
+      $configured = (Get-ItemProperty -Path $regPath -Name NameServer -ErrorAction SilentlyContinue).NameServer
       $result += [PSCustomObject]@{
         InterfaceAlias = $alias
         Family = $family
-        Servers = @($entry.ServerAddresses)
+        Configured = $configured
       }
     }
   }
@@ -102,24 +135,39 @@ $result | ConvertTo-Json -Compress
             AdapterDns(
                 interface_alias=str(item["InterfaceAlias"]),
                 family=str(item["Family"]),
-                servers=[str(s) for s in item.get("Servers") or []],
+                # The CONFIGURED servers (see the module docstring):
+                # a DHCP adapter reads as an empty list, never as
+                # the addresses DHCP happened to hand out.
+                servers=parse_nameserver_value(item.get("Configured")),
             )
             for item in raw
         ]
 
     def get_dns(self, interface_alias: str, family: str) -> List[str]:
-        ps_family = _FAMILY_TO_PS[family]
+        """The adapter's CONFIGURED servers for ``family`` — empty
+        when it obtains DNS automatically (DHCP). This is the value
+        the guard records, compares, and verifies against; the
+        effective (DHCP-learned) addresses are never reported here."""
+        service = _FAMILY_TO_SERVICE[family]
         alias = interface_alias.replace("'", "''")
         script = (
-            f"(Get-DnsClientServerAddress -InterfaceAlias '{alias}' "
-            f"-AddressFamily {ps_family}).ServerAddresses | ConvertTo-Json -Compress"
+            f"$adapter = Get-NetAdapter -Name '{alias}' "
+            "-ErrorAction SilentlyContinue\n"
+            "if ($null -eq $adapter) { throw 'adapter not found' }\n"
+            "$guid = $adapter.InterfaceGuid.ToString('B')\n"
+            f"$regPath = \"HKLM:\\SYSTEM\\CurrentControlSet\\Services\\"
+            f"{service}\\Parameters\\Interfaces\\$guid\"\n"
+            "$configured = (Get-ItemProperty -Path $regPath "
+            "-Name NameServer -ErrorAction SilentlyContinue).NameServer\n"
+            "[PSCustomObject]@{ Configured = $configured } "
+            "| ConvertTo-Json -Compress"
         )
         raw = _run_powershell(script)
-        if raw is None:
-            return []
+        if isinstance(raw, dict):
+            return parse_nameserver_value(raw.get("Configured"))
         if isinstance(raw, str):
-            return [raw]
-        return [str(s) for s in raw]
+            return parse_nameserver_value(raw)
+        return []
 
     def set_dns(self, interface_alias: str, family: str, servers: List[str]) -> None:
         ps_family = _FAMILY_TO_PS[family]

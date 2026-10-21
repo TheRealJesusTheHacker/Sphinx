@@ -75,8 +75,12 @@ class DnsManager(Protocol):
         ...
 
     def get_dns(self, interface_alias: str, family: str) -> List[str]:
-        """The adapter's current DNS servers for ``family``
-        (empty = DHCP)."""
+        """The adapter's CONFIGURED DNS servers for ``family``
+        (empty = automatic/DHCP). Configured, not effective: an
+        implementation must never report the addresses DHCP handed
+        out as if they were a static configuration — recording
+        those as an "original" would make a later restore pin them
+        statically instead of returning the adapter to automatic."""
         ...
 
     def set_dns(self, interface_alias: str, family: str, servers: List[str]) -> None:

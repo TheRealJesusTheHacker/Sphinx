@@ -34,6 +34,17 @@ jobs:
       - name: Run the test suite
         run: python -m pytest tests -q
 
+      - name: Smoke the production DNS manager (read-only)
+        # The unit suite drives a fake manager; this step executes
+        # the real PowerShell-backed reads on a real Windows
+        # machine, so a broken script or registry read fails the
+        # build instead of a user's first run. Read-only: it never
+        # sets anything. (Added by the Phase 1 audit.)
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "src"
+          python -c "from sphinx_win.dnsmgmt.windows_impl import WindowsDnsManager; m = WindowsDnsManager(); rows = m.active_adapters(); print('active adapters:', rows); [print('get_dns', r.interface_alias, r.family, '->', m.get_dns(r.interface_alias, r.family)) for r in rows]"
+
       - name: Build the one-file exe
         run: >-
           python -m PyInstaller packaging/Sphinx.spec --noconfirm
