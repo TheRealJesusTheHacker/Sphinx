@@ -53,6 +53,24 @@ class QueryLogTest {
     }
 
     @Test
+    fun concurrentRecordingStaysBounded() {
+        // The VPN worker pool records from several threads at once;
+        // the ring must stay capped and consistent regardless.
+        val log = QueryLog()
+        val threads = (1..8).map { t ->
+            Thread {
+                repeat(1_000) { i ->
+                    log.record("h$t-$i.example.com", blocked = i % 2 == 0, timestampMillis = i.toLong())
+                }
+            }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+        assertEquals(QueryLog.DEFAULT_CAPACITY, log.size)
+        assertEquals(QueryLog.DEFAULT_CAPACITY, log.snapshot().size)
+    }
+
+    @Test
     fun snapshotIsACopy() {
         val log = QueryLog(capacity = 10)
         log.record("a.example.com", blocked = true, timestampMillis = 1)
