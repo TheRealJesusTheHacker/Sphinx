@@ -109,4 +109,65 @@ class DnsPacketTest {
         headerOnly[2] = 0x01 // RD
         assertNull(DnsPacket.parse(headerOnly))
     }
+
+    // --- Hostile-input coverage (audit): compression pointers are the
+    // classic DNS-parser trap and queries can carry them too. ---
+
+    private fun header(id: Int = 0x2222, arCount: Int = 0): ByteArray {
+        val out = ArrayList<Byte>()
+        fun u16(v: Int) {
+            out.add((v shr 8).toByte()); out.add(v.toByte())
+        }
+        u16(id); u16(0x0100); u16(1); u16(0); u16(0); u16(arCount)
+        return out.toByteArray()
+    }
+
+    @Test
+    fun compressionPointerLoopIsRejected() {
+        // Name at offset 12 is a pointer to offset 12: an infinite loop
+        // for a naive parser. Must come back null, fast.
+        val packet = header() + byteArrayOf(0xC0.toByte(), 0x0C, 0, 1, 0, 1)
+        assertNull(DnsPacket.parse(packet))
+    }
+
+    @Test
+    fun compressionPointerOutOfRangeIsRejected() {
+        val packet = header() + byteArrayOf(0xC0.toByte(), 0x7F, 0, 1, 0, 1)
+        assertNull(DnsPacket.parse(packet))
+    }
+
+    @Test
+    fun compressionPointerChainDecodes() {
+        // "www" + pointer to "example.com" stored just past the question.
+        val suffix = byteArrayOf(7) + "example".toByteArray() +
+            byteArrayOf(3) + "com".toByteArray() + byteArrayOf(0)
+        val packet = header() +
+            byteArrayOf(3) + "www".toByteArray() +
+            byteArrayOf(0xC0.toByte(), 22, 0, 1, 0, 1) + suffix
+        val parsed = DnsPacket.parse(packet)
+        assertNotNull(parsed)
+        parsed!!
+        assertEquals("www.example.com", parsed.questionName)
+        // For a name ending in a pointer, the question ends just past it.
+        assertEquals(22, parsed.questionEnd)
+    }
+
+    @Test
+    fun sinkholeDropsAdditionalRecords() {
+        // A query carrying an EDNS OPT record (ARCOUNT=1): the sinkhole
+        // response echoes header + question only, with zeroed counts
+        // for the authority/additional sections.
+        val query = header(arCount = 1) +
+            byteArrayOf(3) + "ads".toByteArray() +
+            byteArrayOf(7) + "example".toByteArray() +
+            byteArrayOf(3) + "com".toByteArray() + byteArrayOf(0, 0, 1, 0, 1) +
+            byteArrayOf(0, 0, 41, 0x04, 0xD0.toByte(), 0, 0, 0, 0, 0, 0)
+        val parsed = DnsPacket.parse(query)
+        assertNotNull(parsed)
+        val resp = parsed!!.buildSinkholeResponse()
+        assertEquals(1, u16(resp, 6)) // the A answer is still there
+        assertEquals(0, u16(resp, 8)) // NSCOUNT
+        assertEquals(0, u16(resp, 10)) // ARCOUNT — the OPT is not echoed
+        assertEquals(parsed.questionEnd + 16, resp.size)
+    }
 }
