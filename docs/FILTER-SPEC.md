@@ -56,6 +56,57 @@ Safety rails while parsing:
 - **IP literals are never entries.** An address by itself is not a
   name.
 
+## Custom block entries
+
+A user may add their own blocked domains on top of every list.
+Custom entries match exactly like list entries (rules 1–5 above —
+subdomains included, allowlist still wins), and they are held to the
+same entry discipline as list content: an entry is accepted only
+through the same normalization and safety rails the parser applies
+(`normalizeEntry` / `parseEntries` — no single labels, no reserved
+names, no IP literals), so a stored entry always does what it appears
+to do. Editions keep custom entries in their own store, apart from
+downloaded lists, so a list update never overwrites them and removing
+a list source never removes the user's own entries.
+
+## Per-app rules
+
+Editions on platforms that can route per application may offer two
+user-set rules per app:
+
+- **Exclude an app from filtering** — the app bypasses the filter
+  entirely.
+- **Block an app entirely** — the app gets no network access at all
+  while the filter runs.
+
+The Android edition implements these on its one VPN interface, whose
+routes are per-interface rather than per-app, and whose app
+population is all-or-nothing (an allowlist flips the whole VPN to
+just the listed apps). That constraint produces two capture modes,
+and the edition must state plainly which one is in force:
+
+- **Filter mode** — in force while no app is blocked outright. The
+  interface routes only the virtual DNS server address: every app's
+  DNS queries are questioned under the rules above, and no other
+  traffic enters the tunnel. An exempted app is removed from the
+  VPN's population, so neither the route nor the VPN's DNS server
+  applies to it — it connects exactly as if the filter were absent.
+- **App-block mode** — in force while at least one app is blocked
+  outright. The interface's population is only the blocked apps, and
+  it carries a default route (IPv4 and IPv6). Everything a blocked
+  app sends enters the tunnel and is **dropped on the device** —
+  never forwarded, never answered, never inspected beyond the IP and
+  transport headers read to attribute the drop. Every app that is
+  not blocked bypasses the VPN in this mode — including its DNS,
+  which is therefore **not filtered** while app-block mode lasts.
+  No edition may present app-block mode as filtering-plus; the trade
+  is stated wherever the block rule is offered.
+
+Rules are read when the interface (re)starts. Changing a rule takes
+effect by restarting the interface through the same shutdown/start
+path as a stop followed by a start — there is no third, half-applied
+state.
+
 ## Sinkhole behavior (blocked queries)
 
 A blocked query is answered locally and never leaves the device:
@@ -125,6 +176,22 @@ each was blocked, and when. The log:
 - is **on by default** in the Android edition, stated plainly in the
   README, and the user can turn recording **off** or **clear** the log
   at any time.
+
+App-block mode keeps **drop counters** under the same discipline:
+packets dropped, counted per blocked app and in total, held **only
+in memory on the device** — never written to disk by the filter,
+never transmitted. A packet whose owning app the platform cannot
+identify is counted as *unattributed*, never guessed at. Headers
+read for attribution (addresses and ports) feed the count and a
+bounded, memory-only attribution cache, and nothing else; they are
+never written to disk or transmitted.
+
+One degenerate case, for the record: a blocked app that has since
+been uninstalled routes nothing into the interface. If *every*
+blocked app is gone, the population would be empty — and an empty
+allowlist with a default route would capture the whole phone — so
+the interface runs in filter mode until the rules once again name
+an installed app.
 
 ## Honesty rules baked into the design
 

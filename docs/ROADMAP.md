@@ -80,15 +80,40 @@ second warm; the parsed set retains ~9 MB of heap; matching runs at
 roughly 150k lookups/second warm. Sane for a phone; the numbers are
 reproduced by the bundled-list test in the suite.
 
-### Android Phase 3 — Firewall rules
+### Android Phase 3 — Per-app rules and custom entries (landed)
 
-- Per-app rules: block an app's network access entirely, or exempt an
-  app from filtering.
-- Custom block entries: user-added domains on the block side — the
-  counterpart of the Phase 2 allowlist (moved here from Phase 2).
-- Connection log beyond DNS: destinations by app, with plain-language
-  summaries.
-- Optional IPv6 DNS filtering.
+- **Per-app rules.** Exempt an app from filtering, or block an app's
+  network access entirely. Android's shape decided the build —
+  routes are per-interface, not per-app, and an allowlist flips the
+  whole VPN's population — so the edition runs one of two capture
+  modes (FILTER-SPEC.md, "Per-app rules"). With nothing blocked:
+  the Phase 1/2 DNS-only interface, exempted apps disallowed from
+  it. With anything blocked: an app-block interface whose
+  population is only the blocked apps, under an IPv4 + IPv6 default
+  route, dropping everything they send and counting the drops per
+  app (owner attribution via the platform's connection-owner
+  lookup where Android offers it; unattributed where it can't be,
+  never guessed). The honest cost is stated in the app and the
+  README: while app-block mode lasts, other apps bypass the VPN and
+  their DNS is not filtered. Rules are set from a searchable
+  installed-apps picker (apps that can use the network; Sphinx
+  itself is not listed) and take effect by rebuilding the interface
+  through the ordinary shutdown/start lifecycle when the picker is
+  left — no half-applied state.
+- **Custom block entries** (the other half of the original Phase 2
+  line): user-added domains on the block side, entered only through
+  the parser's `normalizeEntry`/`parseEntries` front door — the
+  Phase 2 audit rule — stored in their own file so list updates
+  never overwrite them, honored alongside list entries with
+  allowlist-wins intact.
+- **Visibility.** A rules summary on the main screen (what's
+  blocked, what's exempt) plus the memory-only drop counters.
+- **Not in this phase, stated plainly:** a connection log beyond
+  DNS is still future work — in filter mode Sphinx sees only DNS,
+  and in app-block mode it counts blocked apps' packets without
+  logging destinations. IPv6 *DNS filtering* is also still future;
+  app-block mode does capture a blocked app's IPv6 traffic (and
+  drop it), which is capture, not filtering.
 
 ### Android Phase 4 — Polish
 

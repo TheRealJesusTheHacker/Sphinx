@@ -40,6 +40,20 @@ resolver and the answer comes right back.
 - **An allowlist that always wins.** If a site or app breaks, add its
   domain to the allowlist in the app and it will never be blocked,
   even when a list covers it.
+- **Your own block entries.** Domains you add yourself are blocked
+  exactly like list entries — subdomains included — and the allowlist
+  still wins over them. They live in their own store on the phone, so
+  a list update never overwrites them.
+- **Per-app rules.** You can exempt an app from filtering entirely,
+  or block an app outright so it gets no network at all while Sphinx
+  is on. To show you the apps, Sphinx asks Android for the installed
+  app list — that is what the QUERY_ALL_PACKAGES permission is for.
+  The list is used on this phone, for that screen, and is never sent
+  anywhere; all Sphinx stores is the rules you picked.
+- **Blocked-app drop counts.** While an app is blocked outright,
+  Sphinx counts the packets it drops, per app — memory only, under
+  the same rules as the query log below: never written to permanent
+  storage by the filter, never sent anywhere.
 - **A query log that stays on the phone.** So you can see Sphinx
   working, it keeps the most recent 500 lookups — the name, whether it
   was blocked, and the time — **in memory only**. The log is never
@@ -67,6 +81,14 @@ resolver and the answer comes right back.
   app puts its lookups back where Sphinx can question them.
 - **It uses the phone's one VPN slot.** While Sphinx is on, a separate
   VPN app can't run at the same time — Android allows one VPN at a time.
+- **It can't run the gate both ways at once.** That same one
+  interface has two shapes. Normally it questions DNS and nothing
+  else. Blocking an app outright needs the other shape — so while
+  any app is blocked outright, the blocked apps get no network, and
+  every other app connects *without* DNS filtering for as long as
+  the block lasts. Android's routing is per-interface, not per-app;
+  there is no third shape that does both, and the app says this
+  where the rule is set.
 
 ## Editions
 
@@ -86,15 +108,19 @@ plan is public and honest — not because they're ready.
 
 ## Status
 
-This is **Phase 2: a working filter with a real blocklist engine, not
-a finished product.** The DNS filter runs on a bundled 71,491-domain
-list, updates itself from public list sources when you tap the button
-(with a sanity check and an atomic swap, so a bad download can never
-wipe your protection), honors your allowlist, and keeps a short
-on-device query log. Per-app rules and a polished release build are
-still on the [roadmap](docs/ROADMAP.md). Nothing here is a finished
-public release yet — under Sentinel's standing rule, no release ships
-before it passes an independent audit.
+This is **Phase 3: the filter, plus per-app rules and custom block
+entries — not a finished product.** The DNS filter runs on a bundled
+71,491-domain list, updates itself from public list sources when you
+tap the button (with a sanity check and an atomic swap, so a bad
+download can never wipe your protection), honors your allowlist, and
+keeps a short on-device query log. Phase 3 adds your own custom
+block entries; per-app rules (exempt an app from filtering, or block
+an app outright — with the trade stated plainly above); and per-app
+drop counters, so you can watch a blocked app being stopped. A
+polished release build is still on the [roadmap](docs/ROADMAP.md).
+Nothing here is a finished public release yet — under Sentinel's
+standing rule, no release ships before it passes an independent
+audit.
 
 ## Building
 
