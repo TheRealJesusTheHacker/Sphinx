@@ -32,7 +32,8 @@ from .validation import (
     redirect_target,
 )
 
-CONNECT_TIMEOUT_S = 15.0
+# urllib applies one timeout to the connect and the reads alike;
+# there is no separate connect timeout to promise.
 READ_TIMEOUT_S = 30.0
 MAX_LIST_BYTES = 32 * 1024 * 1024
 MAX_REDIRECTS = 5
