@@ -1,0 +1,153 @@
+"""The filter engine: decisions, counters, the memory-only log, and
+a live loopback socket round trip."""
+import socket
+import struct
+import threading
+
+import pytest
+
+from sphinx_win.core.blocklist import Allowlist, Blocklist, FilterLists
+from sphinx_win.core.server import DnsFilterServer, FilterEngine
+from dnsutil import build_query, build_response_for
+
+
+def _loopback_sendto_permitted() -> bool:
+    """The repo's build sandbox intermittently blocks unconnected
+    UDP sendto() to ephemeral ports (EPERM) — an environment rule,
+    not product behavior (replies on the listening socket are the
+    canonical DNS server shape, and CI is unrestricted). Probe once
+    and skip the live-socket test where the sandbox forbids it."""
+    try:
+        srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        srv.bind(("127.0.0.1", 0))
+        port = srv.getsockname()[1]
+        srv.settimeout(2)
+
+        def serve():
+            try:
+                data, addr = srv.recvfrom(1024)
+                srv.sendto(b"pong", addr)
+            except OSError:
+                pass
+
+        threading.Thread(target=serve, daemon=True).start()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as c:
+            c.settimeout(2)
+            c.connect(("127.0.0.1", port))
+            c.send(b"ping")
+            return c.recvfrom(1024)[0] == b"pong"
+    except OSError:
+        return False
+    finally:
+        try:
+            srv.close()
+        except Exception:
+            pass
+
+
+requires_udp_replies = pytest.mark.skipif(
+    not _loopback_sendto_permitted(),
+    reason="build sandbox blocks unconnected UDP sendto replies",
+)
+
+
+def make_engine(forwarder=None, log_enabled=True):
+    lists = FilterLists(
+        Blocklist.from_lines(["ads.example.com"]),
+        Allowlist.from_lines(["good.ads.example.com"]),
+    )
+    calls = []
+
+    def fake_forward(data):
+        calls.append(data)
+        return build_response_for(data)
+
+    engine = FilterEngine(
+        lambda: lists,
+        forwarder=forwarder or fake_forward,
+        log_enabled=log_enabled,
+        clock_ms=lambda: 1000,
+    )
+    return engine, calls
+
+
+class TestEngine:
+    def test_blocked_name_gets_sinkhole_not_forward(self):
+        engine, calls = make_engine()
+        response = engine.handle_query(build_query("ads.example.com"))
+        assert response is not None
+        assert calls == []
+        assert engine.blocked_count == 1
+        assert engine.allowed_count == 0
+        # Sinkhole: A answer 0.0.0.0
+        assert response[-4:] == b"\x00\x00\x00\x00"
+
+    def test_allowed_name_forwarded_unchanged(self):
+        engine, calls = make_engine()
+        query = build_query("news.example.org")
+        response = engine.handle_query(query)
+        assert calls == [query]
+        assert response == build_response_for(query)
+        assert engine.allowed_count == 1
+
+    def test_allowlist_wins_in_engine(self):
+        engine, calls = make_engine()
+        response = engine.handle_query(build_query("good.ads.example.com"))
+        assert response is not None
+        assert len(calls) == 1  # forwarded, not sinkholed
+        assert engine.allowed_count == 1
+
+    def test_log_records_decisions_in_memory(self):
+        engine, _ = make_engine()
+        engine.handle_query(build_query("ads.example.com"))
+        engine.handle_query(build_query("news.example.org"))
+        entries = engine.query_log.snapshot()
+        assert [(e.name, e.blocked) for e in entries] == [
+            ("news.example.org", False),
+            ("ads.example.com", True),
+        ]
+
+    def test_log_disabled_records_nothing(self):
+        engine, _ = make_engine(log_enabled=False)
+        engine.handle_query(build_query("ads.example.com"))
+        assert len(engine.query_log) == 0
+
+    def test_malformed_packets_are_dropped_quietly(self):
+        engine, calls = make_engine()
+        assert engine.handle_query(b"") is None
+        assert engine.handle_query(b"\xff" * 40) is None
+        assert engine.handle_query(build_query("ads.example.com")[:13]) is None
+        assert calls == []
+
+    def test_upstream_failure_leaves_query_unanswered_but_counted(self):
+        engine, _ = make_engine(forwarder=lambda data: None)
+        assert engine.handle_query(build_query("news.example.org")) is None
+        # Counted at the decision (audited Android semantics).
+        assert engine.allowed_count == 1
+
+
+def free_port_pair():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class TestSocketRoundTrip:
+    @requires_udp_replies
+    def test_udp_round_trip_and_answers_on(self):
+        port = free_port_pair()
+        engine, _ = make_engine()
+        server = DnsFilterServer(engine, port=port)
+        bound = server.start()
+        try:
+            assert ("127.0.0.1", port) in bound
+            assert server.answers_on("127.0.0.1", timeout=2)
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(2)
+                sock.connect(("127.0.0.1", port))
+                sock.send(build_query("ads.example.com"))
+                data, _ = sock.recvfrom(65535)
+            assert struct.unpack(">H", data[6:8])[0] == 1  # one answer
+            assert data[-4:] == b"\x00\x00\x00\x00"
+        finally:
+            server.stop()
