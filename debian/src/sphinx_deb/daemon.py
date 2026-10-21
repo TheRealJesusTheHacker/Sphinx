@@ -1,10 +1,15 @@
 """The Sphinx daemon: the filter, running as a service.
 
-Loads the bundled blocklist (through the sanity gate — a list that
-does not parse to a real blocklist stops the daemon loudly rather
-than "protecting" with a torn file), serves it on loopback, and
-answers the control socket so the command line can prove liveness
-and read real counters.
+Loads the working set from the store — the downloaded lists when
+they are valid, the bundled list as the floor beneath them, the
+user's own rules on top — through the sanity gate: a base list
+that does not parse to a real blocklist stops the daemon loudly
+rather than "protecting" with a torn file. While it runs, it
+watches the store's files and reloads the whole set when they
+change, so `sphinx update`, rule edits, and profile switches land
+in the running filter without a restart. It serves the result on
+loopback and answers the control socket so the command line can
+prove liveness and read real counters.
 
 The daemon never touches the machine's resolver configuration.
 Pointing DNS at the filter is ``sphinx engage``'s job, under the
@@ -20,15 +25,17 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import __version__, paths
 from .control import ControlServer, control_socket_path
-from .core.blocklist import Allowlist, FilterLists
+from .core.blocklist import FilterLists
 from .core.forwarder import UPSTREAM_RESOLVERS, forward_query
 from .core.server import DnsFilterServer, FilterEngine
-from .core.validation import parse_and_validate
-from .resolver.systemview import is_loopback
+from .core.store import LiveState, Store
+from .core.validation import DEFAULT_MIN_DOMAINS
+from .resolver.guard import DnsGuard, DnsState
+from .resolver.systemview import RealSystemView, is_loopback
 
 
 class ConfigError(RuntimeError):
@@ -100,6 +107,100 @@ def _say(message: str) -> None:
     print(f"sphinx: {message}", file=sys.stderr, flush=True)
 
 
+class LiveLists:
+    """The running filter's view of the store: the whole working
+    set, reloaded when the store's files change.
+
+    The store is edited by the command line (list updates, rule
+    edits, profile switches) while the daemon runs. Reloading keys
+    on a watched-file signature (mtime + size): the engine asks
+    for the current lists on every query, and a changed signature
+    swaps in a freshly loaded set *as one unit* — the running
+    filter never sees a half-applied edit, and never needs a
+    restart to see a whole one. A reload that fails (a file
+    vanishing mid-edit, an unreadable list) keeps the last good
+    set and says so in the journal; the daemon *start*, by
+    contrast, has no last good set and refuses to run listless.
+    """
+
+    def __init__(self, store: Store):
+        self._store = store
+        self._lock = threading.Lock()
+        self._signature: Optional[Tuple] = None
+        self._state: Optional[LiveState] = None
+
+    def _signature_now(self) -> Tuple:
+        parts = []
+        for path in self._store.watched_files():
+            try:
+                st = path.stat()
+                parts.append((str(path), st.st_mtime_ns, st.st_size))
+            except OSError:
+                parts.append((str(path), None, None))
+        return tuple(parts)
+
+    def current(self) -> LiveState:
+        """The current working set, reloading first if the store
+        changed. A first-call failure propagates (the daemon
+        refuses to start); a later failure keeps the last good
+        set and does not retry until the files change again."""
+        signature = self._signature_now()
+        with self._lock:
+            if self._state is not None and signature == self._signature:
+                return self._state
+            try:
+                state = self._store.load_live()
+            except Exception as exc:
+                if self._state is None:
+                    raise
+                _say(
+                    "The lists on disk could not be reloaded "
+                    f"({exc}); the filter keeps running with the "
+                    "lists it already has."
+                )
+                self._signature = signature
+                return self._state
+            self._state = state
+            self._signature = signature
+            return state
+
+    def get(self) -> FilterLists:
+        return self.current().lists
+
+
+def _resumption_note() -> Optional[str]:
+    """At daemon start: if Sphinx was on (the guard's recorded
+    intent) but the machine's DNS no longer points at the filter —
+    the resolved stack's runtime engagement does not survive a
+    reboot, and a moved default route strands it the same way —
+    say so, plainly, in the journal. The daemon never re-points
+    anything itself: pointing DNS is the command's job, as root,
+    through the guard's prove-then-point path; this is the
+    surfacing, not the acting. Best effort throughout: a machine
+    whose state cannot be read gets no note, never a dead daemon.
+    (`sphinx status` carries the same reconciliation for the
+    user, with the same words.)"""
+    try:
+        guard = DnsGuard(RealSystemView(), paths.state_dir())
+        intent = guard.load_intent()
+        if not intent or not intent.get("engaged"):
+            return None
+        if guard.load_backup() is None:
+            return None
+        if guard.detect_state() != DnsState.LEFTOVER:
+            return None
+        return (
+            "Sphinx was on, but this machine's DNS no longer points "
+            "at the filter — a reboot or a connection change ended "
+            "the engagement, and nothing was re-pointed behind your "
+            "back. Run 'sudo sphinx engage' to turn Sphinx back on "
+            "against the saved settings, or 'sudo sphinx restore' "
+            "to put the saved settings back."
+        )
+    except Exception:
+        return None
+
+
 def run() -> int:
     """Serve until SIGTERM/SIGINT. Returns the process exit code."""
     try:
@@ -108,34 +209,33 @@ def run() -> int:
         _say(str(exc))
         return 2
 
-    list_file = paths.list_path()
+    store = Store(paths.state_dir(), paths.list_path())
+    live = LiveLists(store)
     try:
-        lines = list_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        initial = live.current()
     except OSError:
         _say(
-            f"The blocklist at {list_file} cannot be read, so the "
-            "filter cannot start. Reinstall the sphinx package to "
-            "restore it."
+            f"The blocklist at {paths.list_path()} cannot be read, "
+            "so the filter cannot start. Reinstall the sphinx "
+            "package to restore it."
         )
         return 2
-    blocklist = parse_and_validate(lines)
-    if blocklist is None:
+    if initial.base_domains < DEFAULT_MIN_DOMAINS:
         _say(
-            f"The blocklist at {list_file} did not pass its sanity "
-            "check (it parsed to fewer domains than a real blocklist "
-            "holds), so the filter cannot start — a broken list must "
-            "never quietly become the protection. Reinstall the "
-            "sphinx package to restore the bundled list."
+            f"The blocklist Sphinx would run with parsed to "
+            f"{initial.base_domains} domains — fewer than a real "
+            "blocklist holds — so the filter cannot start: a broken "
+            "list must never quietly become the protection. "
+            "Reinstall the sphinx package to restore the bundled "
+            "list."
         )
         return 2
-
-    lists = FilterLists(blocklist, Allowlist([]))
 
     def forward(data: bytes):
         return forward_query(data, resolvers=config.upstreams)
 
     engine = FilterEngine(
-        lists_provider=lambda: lists,
+        lists_provider=live.get,
         forwarder=forward,
         log_enabled=config.log_queries,
     )
@@ -153,11 +253,14 @@ def run() -> int:
     started = time.monotonic()
 
     def stats() -> dict:
+        current = live.current()
         return {
             "version": __version__,
             "blocked": engine.blocked_count,
             "allowed": engine.allowed_count,
-            "list_size": blocklist.size,
+            "list_size": current.lists.blocklist.size,
+            "using_downloaded": current.using_downloaded,
+            "last_updated_ms": current.last_updated_ms,
             "bound": [f"{host}:{port}" for host, port in server.bound_addresses],
             "uptime_s": int(time.monotonic() - started),
             "queries_logged": len(engine.query_log),
@@ -178,9 +281,12 @@ def run() -> int:
     where = ", ".join(f"{host}:{port}" for host, port in bound)
     _say(
         f"Sphinx {__version__} is listening on {where} with "
-        f"{blocklist.size:,} domains loaded. Upstream: "
+        f"{initial.lists.blocklist.size:,} domains loaded. Upstream: "
         f"{', '.join(config.upstreams)}."
     )
+    note = _resumption_note()
+    if note is not None:
+        _say(note)
 
     stopped = threading.Event()
 
