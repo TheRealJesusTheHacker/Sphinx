@@ -15,6 +15,7 @@ import com.sentinelsafeguard.sphinx.R
 import com.sentinelsafeguard.sphinx.core.AppRules
 import com.sentinelsafeguard.sphinx.core.CaptureMode
 import com.sentinelsafeguard.sphinx.core.DnsPacket
+import com.sentinelsafeguard.sphinx.core.DnsForwarder
 import com.sentinelsafeguard.sphinx.core.DropCounts
 import com.sentinelsafeguard.sphinx.core.FilterLists
 import com.sentinelsafeguard.sphinx.core.IpFlow
@@ -23,8 +24,6 @@ import com.sentinelsafeguard.sphinx.core.QueryLog
 import com.sentinelsafeguard.sphinx.lists.ListStore
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.net.DatagramPacket
-import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
@@ -488,58 +487,26 @@ class SphinxVpnService : VpnService() {
         }
     }
 
-    /** Send a DNS query to the upstream resolvers; null if all fail. */
-    private fun forward(query: ByteArray): ByteArray? {
-        val queryId = if (query.size >= 2) {
-            ((query[0].toInt() and 0xFF) shl 8) or (query[1].toInt() and 0xFF)
-        } else {
-            return null
-        }
-        for (resolver in UPSTREAM_RESOLVERS) {
-            var socket: DatagramSocket? = null
-            try {
-                socket = DatagramSocket()
-                protect(socket) // keep our own queries out of the VPN
-                socket.soTimeout = UPSTREAM_TIMEOUT_MS
-                // Connected, not just addressed: the kernel then only
-                // delivers datagrams that actually come from this
-                // resolver, so a stray or spoofed packet from anything
-                // else on the network can't be mistaken for the answer.
-                socket.connect(InetSocketAddress(InetAddress.getByName(resolver), DNS_PORT))
-                socket.send(DatagramPacket(query, query.size))
-                val buffer = ByteArray(MAX_PACKET)
-                // Accept only the answer to *this* query: matching ID,
-                // QR (response) bit set. Anything else is ignored — the
-                // same discipline every stub resolver applies
-                // (FILTER-SPEC.md, forwarding rules). The 3-second
-                // budget covers the whole wait, not each datagram:
-                // soTimeout is per-receive, so a stream of mismatched
-                // packets must not be able to stretch it forever.
-                val deadlineNanos =
-                    System.nanoTime() + UPSTREAM_TIMEOUT_MS * 1_000_000L
-                while (true) {
-                    val response = DatagramPacket(buffer, buffer.size)
-                    socket.receive(response)
-                    if (response.length >= 4) {
-                        val responseId =
-                            ((buffer[0].toInt() and 0xFF) shl 8) or (buffer[1].toInt() and 0xFF)
-                        val isResponse = buffer[2].toInt() and 0x80 != 0
-                        if (responseId == queryId && isResponse) {
-                            return buffer.copyOf(response.length)
-                        }
-                    }
-                    if (System.nanoTime() > deadlineNanos) {
-                        throw java.net.SocketTimeoutException("no matching response in time")
-                    }
-                }
-            } catch (e: Exception) {
-                // Timeout or socket error: try the next resolver.
-            } finally {
-                socket?.close()
-            }
-        }
-        return null
-    }
+    /**
+     * Send a DNS query to the upstream resolvers; null if all fail.
+     * The exchange itself is [DnsForwarder] — the pure-Kotlin port
+     * of the Python editions' forwarder, JVM-tested there — with
+     * this service's protect() supplied so the upstream sockets
+     * (UDP, and TCP when a truncated answer is completed per
+     * RFC 7766) can't loop back into the VPN. Accept only the
+     * answer to *this* query: matching ID, QR (response) bit set —
+     * the same discipline every stub resolver applies
+     * (FILTER-SPEC.md, forwarding rules), enforced in the forwarder.
+     */
+    private fun forward(query: ByteArray): ByteArray? =
+        DnsForwarder.forwardQuery(
+            query,
+            resolvers = UPSTREAM_RESOLVERS,
+            timeoutMs = UPSTREAM_TIMEOUT_MS,
+            port = DNS_PORT,
+            protectUdp = { protect(it) },
+            protectTcp = { protect(it) },
+        )
 
     private fun writeResponse(output: FileOutputStream, packet: ByteArray) {
         synchronized(writeLock) {
