@@ -36,7 +36,7 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_sphinx"
-        android:label="@string/app_name"
+        android:label="${appLabel}"
         android:theme="@style/Theme.Sphinx">
 
         <activity
@@ -54,6 +54,15 @@
             android:name=".AppPickerActivity"
             android:exported="false"
             android:label="@string/section_apps" />
+
+        <!-- The fix2-hunt diagnostics screen: protection state,
+             the upstream chain in use with per-resolver outcomes,
+             Private DNS state, and the probe panel. Opened only
+             from inside Sphinx; not exported. -->
+        <activity
+            android:name=".DiagnosticsActivity"
+            android:exported="false"
+            android:label="@string/diag_title" />
 
         <!--
           The filter itself. BIND_VPN_SERVICE means only the Android

@@ -92,6 +92,41 @@
     <string name="button_battery_settings">Open battery settings…</string>
     <string name="battery_settings_failed">Couldn\'t open Android\'s battery settings from here.</string>
 
+    <!-- Diagnostics (fix2 hunt) -->
+    <string name="button_diagnostics">Open diagnostics</string>
+    <string name="diag_title">Diagnostics</string>
+    <string name="diag_explainer">What Sphinx is actually doing on this phone, in plain words: whether it is protecting, which DNS servers it asks (in order) and what each one last did, how Android Private DNS is set, and a probe that tests a name end to end. Nothing here leaves the phone.</string>
+    <string name="diag_section_state">Protection</string>
+    <string name="diag_protection_on">Sphinx is ON — it is questioning this phone\'s DNS lookups.</string>
+    <string name="diag_protection_off">Sphinx is OFF — nothing is being filtered. Turn it on from the main screen, then check back here.</string>
+    <string name="diag_drops_none">Queries dropped because Sphinx was too busy to answer: 0.</string>
+    <string name="diag_drops_some">Queries dropped because Sphinx was too busy to answer: %1$d. If this number grows while apps fail, the phone is asking faster than the upstreams reply — the chain below shows which ones are slow or silent.</string>
+    <string name="diag_section_chain">Upstream chain — who Sphinx asks, in order</string>
+    <string name="diag_chain_explainer">Sphinx asks these DNS servers in order until one answers. Public servers come first; your phone\'s own DNS servers are the safety net at the end — the ones that were working the moment before Sphinx started.</string>
+    <string name="diag_chain_unknown">No chain captured yet — Sphinx hasn\'t forwarded a query since it started. Turn Sphinx on, use any app for a few seconds, then look again.</string>
+    <string name="diag_chain_line">%1$d. %2$s — %3$s, %4$s</string>
+    <string name="diag_chain_public">public resolver</string>
+    <string name="diag_chain_from_phone">your phone\'s own DNS</string>
+    <string name="diag_outcome_never">Last try: not tried yet.</string>
+    <string name="diag_outcome_answered">Last try: answered at %1$s (took %2$d ms).</string>
+    <string name="diag_outcome_timeout">Last try: no answer — timed out or errored at %1$s.</string>
+    <string name="diag_outcome_protect">Last try: Android refused to shield the connection from the VPN at %1$s, so nothing was sent.</string>
+    <string name="diag_outcome_bind">Last try: the connection couldn\'t be tied to this server\'s network at %1$s, so nothing was sent.</string>
+    <string name="diag_floor_missing">Warning: Sphinx could not find ANY DNS server from your phone\'s own networks — the safety net at the end of the chain is missing. If the public resolvers can\'t be reached from this network either, allowed names will fail. Try toggling airplane mode, or switching between Wi-Fi and mobile data, then restart Sphinx.</string>
+    <string name="diag_section_pdns">Android Private DNS</string>
+    <string name="diag_pdns_on_named">Private DNS is ON with a specific server: %1$s. In this mode Android sends DNS over an encrypted connection straight to that server and may bypass Sphinx entirely — or fail outright if that connection can\'t be made. If apps break with Sphinx on, set Private DNS to Off or Automatic in Settings → Network &amp; internet → Private DNS, then test again.</string>
+    <string name="diag_pdns_on">Private DNS is ON with a specific server. In this mode Android sends DNS over an encrypted connection straight to that server and may bypass Sphinx entirely — or fail outright if that connection can\'t be made. If apps break with Sphinx on, set Private DNS to Off or Automatic in Settings → Network &amp; internet → Private DNS, then test again.</string>
+    <string name="diag_pdns_automatic">Private DNS is on Automatic. Android tries an encrypted DNS connection first and falls back to normal DNS — which Sphinx questions — when that doesn\'t work. This mode normally works with Sphinx.</string>
+    <string name="diag_pdns_off">Private DNS is OFF. All DNS goes through the normal path, which Sphinx questions. This is the setting Sphinx works best with.</string>
+    <string name="diag_section_probe">Probe a name</string>
+    <string name="diag_probe_explainer">A probe asks the same question your apps ask. It first checks the name against the block list; if the name is allowed, it asks the real upstream chain and reports what came back.</string>
+    <string name="diag_probe_site">Probe sentinelsafeguard.net (should resolve)</string>
+    <string name="diag_probe_listed">Probe doubleclick.net (should be blocked)</string>
+    <string name="diag_probe_button">Probe the typed name</string>
+    <string name="diag_probe_empty">Type a domain name first — for example, the site that won\'t load.</string>
+    <string name="diag_probe_needs_filter">Turn Sphinx on first — a probe uses the same chain the running filter uses.</string>
+    <string name="diag_probe_running">Asking about %1$s… a full check can take several seconds when servers are slow.</string>
+
     <!-- Query log (Phase 2) -->
     <string name="section_log">Query log</string>
     <string name="log_explainer">The most recent lookups Sphinx questioned — kept only in memory on this phone, never sent anywhere, and gone when the app\'s process stops. Recording is on by default so you can see Sphinx working; turn it off any time.</string>

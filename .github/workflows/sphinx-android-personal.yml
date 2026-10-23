@@ -33,10 +33,10 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Run the Android unit tests (Gradle)
-        run: ./gradlew testDebugUnitTest --console=plain
+        run: ./gradlew -PhuntBuild=true testDebugUnitTest --console=plain
 
       - name: Build the personal debug APK
-        run: ./gradlew assembleDebug --console=plain
+        run: ./gradlew -PhuntBuild=true assembleDebug --console=plain
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

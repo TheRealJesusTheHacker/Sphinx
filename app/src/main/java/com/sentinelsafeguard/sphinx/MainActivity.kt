@@ -73,6 +73,9 @@ class MainActivity : Activity() {
 
     private lateinit var notificationHintText: TextView
 
+    private lateinit var buildLabelText: TextView
+    private lateinit var diagnosticsButton: Button
+
     private lateinit var profilesStatusText: TextView
     private lateinit var profilesSpinner: Spinner
     private lateinit var profileSwitchButton: Button
@@ -143,6 +146,13 @@ class MainActivity : Activity() {
         }
 
         notificationHintText = findViewById(R.id.notificationHintText)
+
+        buildLabelText = findViewById(R.id.buildLabelText)
+        buildLabelText.text = getString(R.string.build_label)
+        diagnosticsButton = findViewById(R.id.diagnosticsButton)
+        diagnosticsButton.setOnClickListener {
+            startActivity(Intent(this, DiagnosticsActivity::class.java))
+        }
 
         profilesStatusText = findViewById(R.id.profilesStatusText)
         profilesSpinner = findViewById(R.id.profilesSpinner)

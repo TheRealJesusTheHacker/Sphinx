@@ -41,16 +41,41 @@ if (presentSigningEnv.isNotEmpty() && !releaseSigningReady) {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Hunt build identity (fix2 hunt, 2026-10-23) — branch-only, never
+// merged. The owner's phone failure could not be distinguished from
+// a failed install: the SEV-1 personal build #1 and the fix1 build
+// shared one applicationId and one debug key lineage, so "still a
+// problem" could not say which binary was running. A build made
+// with -PhuntBuild=true is therefore a DIFFERENT app to Android:
+// its own applicationId (installs side by side, no uninstall
+// trap), its own launcher label, and a build label rendered from
+// the generated build_label string on the main and diagnostics
+// screens. Without the property, every value below is exactly the
+// shipped one — the gate workflow and the release path are
+// untouched by this switch.
+// ---------------------------------------------------------------------------
+val huntBuild = project.findProperty("huntBuild") == "true"
+
 android {
     namespace = "com.sentinelsafeguard.sphinx"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.sentinelsafeguard.sphinx"
+        applicationId = if (huntBuild) {
+            "com.sentinelsafeguard.sphinx.hunt"
+        } else {
+            "com.sentinelsafeguard.sphinx"
+        }
         minSdk = 26
         targetSdk = 34
         versionCode = 5
-        versionName = "0.4.1"
+        versionName = if (huntBuild) "0.4.1-hunt-fix2" else "0.4.1"
+        manifestPlaceholders["appLabel"] = if (huntBuild) "Sphinx Hunt" else "@string/app_name"
+        resValue(
+            "string", "build_label",
+            if (huntBuild) "HUNT BUILD fix2 — 0.4.1 + DNS hunt" else "Version 0.4.1",
+        )
     }
 
     signingConfigs {
