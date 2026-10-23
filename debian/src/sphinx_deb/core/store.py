@@ -50,20 +50,51 @@ from .validation import (
 STORE_STATE_NAME = "store.json"
 
 
+def _fsync_file(path: Path) -> None:
+    """Flush one file's contents to stable storage."""
+    with open(path, "r+b") as f:
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _fsync_dir(path: Path) -> None:
+    """Flush a directory entry to stable storage."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def write_atomically(target: Path, data: bytes) -> None:
     """Write ``data`` to ``target`` so the file is never left torn:
-    write a temp file, then rename it over the target. If the rename
-    ever refuses, stage the copy under a second name and rename
-    *that* — copying straight over the target is not an option,
-    because a crash mid-copy would leave half a file behind (and a
-    half-written list can still pass the sanity gate as a silently
-    weaker list). If even the staged rename fails, the old file stays
-    and the temps are cleaned up. (The fleet's store discipline —
-    the resolver's systemview carries the same helper for its files.)
+    write a temp file, fsync it, then rename it over the target
+    (and fsync the containing directory after) — without the
+    fsyncs the rename can reach the disk before the data does, and
+    the "atomic" write is not power-loss-durable (Sweep #3, W-4,
+    fixed on Windows; the same fix landed here in Sweep #4 when
+    the Debian port was found still carrying the pre-W-4 helper).
+    If the rename ever refuses, stage the copy under a second name
+    and rename *that* — copying straight over the target is not an
+    option, because a crash mid-copy would leave half a file behind
+    (and a half-written list can still pass the sanity gate as a
+    silently weaker list). If even the staged rename fails, the
+    old file stays, the temps are cleaned up, and the failure is
+    RAISED: a save that never happened must never be reported as
+    success. (The fleet's store discipline — the resolver's
+    systemview carries the same helper for its files.)
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_name(target.name + ".tmp")
-    temp.write_bytes(data)
+    with open(temp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
     # The mode is set explicitly, never left to the writer's umask:
     # the only writer is the command running as root, and the only
     # reader that matters is the daemon running as the unprivileged
@@ -82,6 +113,7 @@ def write_atomically(target: Path, data: bytes) -> None:
         pass
     try:
         os.replace(temp, target)
+        _fsync_dir(target.parent)
         return
     except OSError:
         pass
@@ -92,17 +124,23 @@ def write_atomically(target: Path, data: bytes) -> None:
             os.chmod(swap, 0o644)  # copyfile does not carry the mode
         except OSError:
             pass
+        _fsync_file(swap)
         os.replace(swap, target)
-    except OSError:
+    except OSError as e:
         try:
             swap.unlink(missing_ok=True)
         except OSError:
             pass
+        raise OSError(
+            f"Sphinx could not replace {target.name} — the previous "
+            "file was left unchanged."
+        ) from e
     finally:
         try:
             temp.unlink(missing_ok=True)
         except OSError:
             pass
+    _fsync_dir(target.parent)
 
 
 def _file_name_for(url: str) -> str:

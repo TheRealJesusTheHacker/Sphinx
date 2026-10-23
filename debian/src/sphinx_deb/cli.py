@@ -514,7 +514,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     if handler is None:
         parser.print_help()
         return EXIT_REFUSED
-    return handler(args)
+    try:
+        return handler(args)
+    except OSError as exc:
+        # A save or resolver write that failed on disk must surface
+        # as a plain refusal, never a traceback — and never as the
+        # success the handler would have printed had the write
+        # landed (Sweep #4: store writes now raise on failure, the
+        # W-4 rule, so this is where that honesty reaches the user).
+        print(f"Sphinx could not finish that: {exc}")
+        return EXIT_REFUSED
 
 
 if __name__ == "__main__":

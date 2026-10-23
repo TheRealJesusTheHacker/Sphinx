@@ -129,3 +129,36 @@ def test_watched_files_cover_everything_that_changes_the_set(tmp_path):
     assert str(store.custom_block_file) in watched
     for source in store.sources():
         assert str(store.file_for(source)) in watched
+
+
+def test_store_atomic_write_is_fsynced_and_raises_on_final_failure(tmp_path, monkeypatch):
+    # Sweep #4 (W-4 parity): the Debian store's write_atomically
+    # carried the pre-W-4 helper — no fsync, and a failed staged
+    # rename was swallowed, so a save that never landed could be
+    # reported as success by every caller above it.
+    import os
+
+    import pytest
+
+    from sphinx_deb.core.store import write_atomically
+
+    fsynced = []
+    real_fsync = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: fsynced.append(fd) or real_fsync(fd))
+    target = tmp_path / "f.txt"
+    write_atomically(target, b"durable")
+    assert target.read_bytes() == b"durable"
+    assert fsynced  # temp file (and directory) flushed before/after rename
+    monkeypatch.undo()
+
+    target.write_bytes(b"old")
+
+    def always_refuse(src, dst):
+        raise OSError("injected replace refusal")
+
+    monkeypatch.setattr(os, "replace", always_refuse)
+    with pytest.raises(OSError):
+        write_atomically(target, b"never-lands")
+    assert target.read_bytes() == b"old"  # the old file stays
+    assert not (tmp_path / "f.txt.tmp").exists()
+    assert not (tmp_path / "f.txt.swap").exists()
