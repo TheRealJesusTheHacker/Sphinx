@@ -467,3 +467,16 @@ honesty rules hold (names, not content; nothing leaves the device).
   edition ships before its audit gate passes.
 - Published checksums (SHA256SUMS) alongside every release, verified by
   re-download.
+
+- **v1.0.0 — PUBLISHED 2026-10-23.** First public release:
+  https://github.com/TheRealJesusTheHacker/Sphinx/releases/tag/v1.0.0
+  (release id 419322679, tag `v1.0.0` on audited HEAD
+  `f1afdffc8c27`). Assets: `SphinxSetup.exe`, `Sphinx.exe`,
+  `SphinxPortable.zip` (Windows v0.3.0, from CI run 39569349230),
+  `sphinx_0.2.0_all.deb` (Debian 0.2.0), and `SHA256SUMS.txt` —
+  every asset re-downloaded from the release and its sha256
+  verified against `SHA256SUMS.txt`. Android (v0.4.1) is not in
+  this release: a public APK needs the owner's release keystore,
+  which does not exist yet, and no debug-signed build ships. The
+  three real-machine passes named in the release notes (Android
+  phone, Windows machine, Debian machine) remain owed.
