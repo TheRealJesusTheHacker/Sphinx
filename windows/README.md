@@ -22,10 +22,11 @@ Sphinx v1.0.0 (2026-10-23)**; the current release is **v0.3.1
 in Sphinx v1.0.1 (2026-10-23)**, carrying the W-1–W-7
 restore-discipline fixes and the R-17 installer branding.
 **Landed on `main` after v1.0.1, not yet in a release: VPN
-mode Phase 1** ([../docs/TUNNEL-SPEC.md](../docs/TUNNEL-SPEC.md)) —
+mode Phases 1–2** ([../docs/TUNNEL-SPEC.md](../docs/TUNNEL-SPEC.md)) —
 WireGuard server profiles, the four-mode model, and the kill
-switch, in the "VPN mode" section below; OpenVPN connections
-and the VPN Gate directory are Phase 2 there. Both
+switch (Phase 1), plus OpenVPN connections through the user's
+own installed OpenVPN program and the VPN Gate public-nodes
+directory (Phase 2), in the "VPN mode" section below. Both
 releases passed the release gate in the roadmap (independent
 audit → fix → re-audit, CI builds on the released commit,
 published checksums verified by re-download). The real-machine
@@ -151,7 +152,7 @@ happened yet — v1.0.0 shipped with that pass named in its
 release notes as still owed, alongside the other real-Windows
 proofs, and this README won't pretend otherwise.
 
-## VPN mode (TUNNEL-SPEC Phase 1 — WireGuard)
+## VPN mode (TUNNEL-SPEC Phases 1–2 — WireGuard + OpenVPN)
 
 The shared tunnel spec ([../docs/TUNNEL-SPEC.md](../docs/TUNNEL-SPEC.md))
 adds a real VPN mode beside the blocker. The four modes, as the
@@ -167,8 +168,12 @@ behavior above, untouched), **VPN only**, and **VPN + Blocker**.
   locations, no mock entries — ever. The picker's first-run state
   is an honest "No servers yet — add one from a config file or
   paste a config your provider gave you." Servers are added by
-  importing a standard WireGuard `.conf` (or, as a stored and
-  labeled record, an OpenVPN `.ovpn` — see Phase scope below).
+  importing a standard WireGuard `.conf` or an OpenVPN `.ovpn`
+  (both connect — WireGuard since Phase 1, OpenVPN since
+  Phase 2, below). The separate "Public volunteer servers"
+  directory is not part of this list: it lives in its own
+  section of the window, is fetched only when you open it, and
+  is covered under its own heading below.
   Import validates against the shared corpus
   (`docs/tunnel-corpus.json`, which the test suite reads
   directly): bad keys, an endpoint with no port, bad CIDRs, and a
@@ -321,33 +326,180 @@ Sphinx must not strand theirs. The embed route has none of
 those, and its license terms (above) are expressly written for
 this use.
 
-**Phase 1 scope, honestly.** WireGuard profiles **connect**.
-OpenVPN profiles parse, store, display, and are **refused at
-connect with the reason named** — OpenVPN connections (through
-the system `openvpn` program, invoked at arm's length) and the
-VPN Gate public-nodes directory are Phase 2. The VPN Gate
-directory does not exist in the picker yet; the list holds only
-servers you add. And the real-machine boundary, stated as
-plainly as everywhere else in this README: the mode model, the
-corpus, the store discipline, and the config-blob layout are
-proven by the suite (277 passed / 5 skipped in the dev
-environment, against the 195 passed / 4 skipped pre-VPN
-baseline — the Qt UI modules are among the skips wherever
+### OpenVPN (Phase 2) — the route, evaluated
+
+OpenVPN on Windows is a program the user installs; there is no
+embeddable component to bundle the way WireGuardNT bundles.
+Two routes were evaluated against the same ownership model as
+Phase 1 (one tray-resident process owns the tunnel and its
+state):
+
+**(a) SUPERVISE the installed `openvpn.exe` as a child process
+— CHOSEN (invoked).** Sphinx writes a sanitized config (below),
+launches the installed client as its own child with its own
+controlled flags only (its own loopback management endpoint,
+`--script-security 0`, its own log capture), and owns the
+lifecycle and the state. Routes and the TAP/Wintun adapter
+need elevation, which fits the edition's existing UAC story
+unchanged: the child inherits the elevation the user already
+approved for Sphinx itself. "Connected" is proven the same
+way as WireGuard's — never from the process having spawned:
+the management interface must report CONNECTED/SUCCESS (the
+client's "Initialization Sequence Completed" log line is the
+fallback proof), and the status reads that proof, fresh, every
+time it is asked.
+
+**(b) Drive the official OpenVPNService / interactive service
+— not chosen.** That service is a *second owner* of tunnel
+state: it would hold the connection, its lifecycle, and its
+own idea of "connected," and Sphinx would be interrogating
+another program to report its own status truthfully — the
+argument that rejected route (b) for WireGuard in Phase 1.
+Teardown would split the same way (uninstall and quit
+negotiating with a service Sphinx does not own). Route (a) is
+workable, so (b) was not taken.
+
+One WireGuard discipline does not translate literally, and
+the difference is stated rather than papered over: a
+WireGuard endpoint is resolved by Sphinx and pinned before
+engagement (the backend takes only an address). An OpenVPN
+config's `remote` is resolved by the OpenVPN client itself at
+startup — before its routes exist, i.e. still on the
+pre-tunnel network — and the server's certificate validation
+is tied to that name, so Sphinx leaves `remote` as written in
+the (sanitized) config and claims no pin of its own.
+
+**Licensing — invoked, never bundled.** The OpenVPN community
+client is GPLv2. Sphinx bundles nothing, links nothing, ships
+no copy, and never downloads or installs one for you: it runs
+*your* installed OpenVPN (the community installer or OpenVPN
+Connect, from openvpn.net) at arm's length as a separate
+process, which does not attach its license to Sphinx (MIT).
+If OpenVPN isn't installed, connecting an OpenVPN profile says
+exactly that and names the remedy — *"OpenVPN isn't installed
+on this machine… Install OpenVPN yourself — the community
+installer or OpenVPN Connect, from openvpn.net"* — never a
+silent failure.
+
+**Config sanitization — a stranger's config runs nothing.**
+An OpenVPN config can do far more than describe a tunnel:
+several directives make the client run programs, load
+plugins, or hand itself to a control socket. So the text the
+client runs is never the stored text. At connect time Sphinx
+sanitizes a working copy — the stored profile is never edited
+— removing, by name: `up`, `down`, `route-up`,
+`route-pre-down`, `plugin`, `script-security`, `management`
+(and every `management-*`), `iproute`, `tls-verify`,
+`auth-user-pass` *when it names a file* (the bare interactive
+form stays), `cd`, `chroot`, `daemon`, `writepid`, `status`,
+`log`, `log-append`, and the other script-running directives
+(`learn-address`, `client-connect`, `client-disconnect`). The
+removals are named in the connect output and in the session's
+status, and recorded in the tunnel record — no silent edits.
+Sphinx's own flags are the only flags: even a directive that
+somehow survived could not run, because the client is launched
+with `--script-security 0`.
+
+**DNS honesty for OpenVPN.** An OpenVPN server *pushes* DNS.
+In VPN + Blocker the brain stays in front: the pushed set
+becomes the filter's upstream set, reached through the tunnel,
+and the status says so. In VPN only, the pushed set is
+accepted as the server's DNS — applied as tunnel-record state
+under the same save-first / verify / restore-exactly
+discipline as everything else (the DNS guard's backup is never
+touched) — and the status says whose DNS is in force. A server
+that pushes no DNS gets no invented DNS: the status states
+that the machine's existing DNS is in force. No DNS change
+rides outside the tunnel record, and nothing is silent.
+
+**Kill switch — the level actually achieved, stated plainly.**
+This is **not** the WireGuardNT blackhole level, and this
+README does not claim it is. `openvpn.exe` removes its own
+routes when it exits, so if the child dies unexpectedly Sphinx
+cannot blackhole routes it no longer owns. What Sphinx does
+hold, it holds completely: it *notices* (the tray polls the
+tunnel status; an unexpected exit is the next status read),
+nothing is silently restored — your DNS stays exactly where
+Sphinx placed it for the tunnel (the filter's loopback, or the
+server's pushed set under the tunnel record), in the blocked
+posture — and the status announces the state in plain words
+("VPN disconnected — the OpenVPN program exited
+unexpectedly…") with the two visible choices, **Reconnect** or
+**Disconnect** (disconnect restores everything, exactly,
+through the ordinary path). The posture is announced or it
+does not exist: there is no silent unwrap to a direct
+connection, and no silent full-block either — the held DNS is
+the tunnel's own, and the state names itself.
+
+### Public volunteer servers (the VPN Gate directory)
+
+The window's VPN area has a separate section — its own box,
+its own words — titled **Public volunteer servers**, visually
+and verbally distinct from your own profiles. It is **never
+pre-enabled**: nothing is fetched, loaded, or shown until you
+press "Show public volunteer servers," on purpose. The list
+comes from VPN Gate's published feed
+(`https://www.vpngate.net/api/iphone/` — HTTPS only,
+size-capped, timeout-bounded), fetched **at use time**: the
+list churns hourly, so no snapshot is bundled, ever. A cached
+copy may be shown when a fresh fetch fails, with its age
+labeled ("List from cache — fetched 2 hours ago"); a dead
+feed with no cache is an honest empty state ("Couldn't fetch
+the list — check your connection"), never last week's servers
+dressed as today's. Each row becomes an ordinary OpenVPN
+connection choice labeled **"Public volunteer server —
+\<Country\> (\<host\>)"**; connecting it runs the same
+sanitizer, engine, mode model, and kill-switch posture as any
+OpenVPN profile.
+
+The disclosure ships at the point of use — in the section
+itself **and again in the connect confirmation**, in these
+words:
+
+> These are strangers' machines, volunteered to a research
+> project (VPN Gate, University of Tsukuba). The operator can
+> see your traffic. VPN Gate states its servers keep
+> connection logs — your real address, the times, the server
+> you used — for three months or more. Fine for appearing to
+> be somewhere else; not for anything sensitive.
+
+A directory without that warning in those places does not
+ship; the test suite pins its presence in both.
+
+**Scope, honestly (Phases 1–2).** WireGuard profiles connect
+(Phase 1); OpenVPN profiles — yours and the directory's —
+connect through your installed OpenVPN (Phase 2). And the
+real-machine boundary, stated as plainly as everywhere else
+in this README: the mode model, the corpus, the sanitizer,
+the feed parser and cache discipline, the store discipline,
+and the config-blob layout are proven by the suite
+(315 passed / 6 skipped in the dev environment, 338 passed /
+2 skipped with Qt present — against the 277 passed / 5
+skipped Phase 1 close and the 195 passed / 4 skipped pre-VPN
+baseline; the Qt UI modules are among the skips wherever
 PySide6 is absent and run in CI and in a Qt-complete
-environment), but bringing a
-real adapter up on a real Windows machine — handshake against a
-live server, routes in force, kill-switch behavior under a
-pulled cable — has **not** happened yet and is a release gate,
-not a claim this section makes.
+environment), but bringing a real adapter up on a real Windows
+machine — a WireGuard handshake against a live server, an
+OpenVPN session through a real installed client against a
+real server (a VPN Gate node included), routes in force,
+kill-switch behavior under a pulled cable — has **not**
+happened yet and is a release gate, not a claim this section
+makes. The OpenVPN supervisor's management-interface proof
+path in particular is exercised only against the suite's fake
+and its log parsers until that pass happens.
 
 **Uninstalling with the tunnel up.** The uninstaller's first
 act — before the DNS restore, before any file is removed — is
 `Sphinx.exe --restore-vpn`: the tunnel session is torn down and
 exactly what its record holds is restored and verified (a
 running tray host's own quit disconnects the VPN first; the
-uninstaller closes applications before it runs). If the
-teardown cannot be verified, the uninstall **aborts with a
-plain explanation**, exactly the DNS discipline.
+uninstaller closes applications before it runs). For an
+OpenVPN session the record also names the supervised
+`openvpn.exe` child's pid, and the teardown ends exactly that
+recorded process — never a stranger's — before the DNS
+restore. If the teardown cannot be verified, the uninstall
+**aborts with a plain explanation**, exactly the DNS
+discipline.
 
 ## Profiles (Phase 3)
 

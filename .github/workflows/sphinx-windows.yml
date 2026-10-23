@@ -45,6 +45,19 @@ jobs:
           $env:PYTHONPATH = "src"
           python -c "from sphinx_win.dnsmgmt.windows_impl import WindowsDnsManager; m = WindowsDnsManager(); rows = m.active_adapters(); print('active adapters:', rows); [print('get_dns', r.interface_alias, r.family, '->', m.get_dns(r.interface_alias, r.family)) for r in rows]"
 
+      - name: Smoke the production OpenVPN manager (read-only)
+        # Phase 2's engine supervises the user's installed
+        # openvpn.exe; this step executes its discovery and
+        # honest-availability path on a real Windows machine.
+        # Read-only: it starts nothing. On the runner image
+        # OpenVPN is not installed, so the expected output is the
+        # honest "OpenVPN isn't installed" state — the step fails
+        # only if the module or that path is broken.
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "src"
+          python -c "from sphinx_win.tunnelmgmt.openvpn_windows_impl import WindowsOpenVpnManager; m = WindowsOpenVpnManager(); ok, reason = m.availability(); print('openvpn available:', ok); print('reason:', reason); print('status:', m.status()); assert isinstance(ok, bool) and (ok or 'OpenVPN isn' in reason)"
+
       - name: Build the one-file exe
         run: >-
           python -m PyInstaller packaging/Sphinx.spec --noconfirm
