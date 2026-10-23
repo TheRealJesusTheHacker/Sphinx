@@ -38,8 +38,8 @@ from ..core.forwarder import Forwarder, forward_query
 from ..core.querylog import QueryLog
 from ..core.server import DnsFilterServer, FilterEngine
 from ..core.store import Store
+from ..core.openvpn_sanitize import sanitize_openvpn_config
 from ..core.tunnel import (
-    OPENVPN_PHASE2_MESSAGE,
     TunnelRefusal,
     endpoint_host,
     endpoint_port,
@@ -49,6 +49,7 @@ from ..core.tunnelstore import TunnelState, TunnelStore, TunnelStoreError
 from ..dnsmgmt.base import AdapterDns, DnsManager, NotElevatedError
 from ..dnsmgmt.guard import DnsGuard, DnsState
 from ..tunnelmgmt.base import TunnelError, TunnelManager, TunnelNotElevated
+from ..tunnelmgmt.openvpn_base import OPENVPN_NOT_INSTALLED_MESSAGE
 
 
 class StartError(RuntimeError):
@@ -95,6 +96,7 @@ class SphinxController:
         data_dir: Path,
         server_factory=None,
         tunnel_manager: Optional[TunnelManager] = None,
+        openvpn_manager=None,
         tunnel_store: Optional[TunnelStore] = None,
         resolver: Optional[Callable[[str], str]] = None,
         vpn_forwarder_factory: Optional[Callable[[List[str]], Forwarder]] = None,
@@ -110,6 +112,11 @@ class SphinxController:
         # tunnel state record is a PARALLEL record in the same data
         # folder — the DNS backup contract is untouched by it.
         self._tunnel_manager = tunnel_manager
+        # Phase 2: the OpenVPN engine (tunnelmgmt.openvpn_base) is
+        # a second, protocol-specific manager under the same mode
+        # model — profiles dispatch on their protocol, never on
+        # which manager happens to be present.
+        self._openvpn_manager = openvpn_manager
         self.tunnel_store = tunnel_store or TunnelStore(Path(data_dir))
         self._resolver = resolver or _default_resolver
         self._vpn_forwarder_factory = vpn_forwarder_factory or (
@@ -121,6 +128,7 @@ class SphinxController:
         self._default_forwarder = forward_query
         self._vpn_active = False
         self._vpn_profile_name: Optional[str] = None
+        self._vpn_protocol: Optional[str] = None
         # Injectable so the orchestration is testable without binding
         # port 53; production uses the real loopback server.
         self._server_factory = server_factory or (
@@ -294,8 +302,9 @@ class SphinxController:
     def connect_vpn(self, profile_name: str, *, with_blocker: bool) -> str:
         """Connect a server profile, per the mode model:
 
-        1. The profile is read and its protocol checked (OpenVPN
-           is refused at connect with the reason named — Phase 1).
+        1. The profile is read and dispatched on its protocol:
+           WireGuard to the WireGuardNT manager, OpenVPN to the
+           OpenVPN engine (Phase 2 — _connect_openvpn).
         2. A second tunnel disconnects the first through the
            ordinary stop path first — one tunnel at a time.
         3. The endpoint is resolved BEFORE anything engages, with
@@ -310,15 +319,15 @@ class SphinxController:
            DNS guard's backup is never touched by this path).
         5. Connected is claimed only on a fresh handshake.
         """
-        if self._tunnel_manager is None:
-            raise StartError(
-                "VPN mode is not available in this build of Sphinx."
-            )
         profile = self.tunnel_store.get_profile(profile_name)
         if profile is None:
             raise StartError(f"No saved server named {profile_name!r}.")
         if profile.protocol == "openvpn":
-            raise StartError(OPENVPN_PHASE2_MESSAGE)
+            return self._connect_openvpn(profile, with_blocker=with_blocker)
+        if self._tunnel_manager is None:
+            raise StartError(
+                "VPN mode is not available in this build of Sphinx."
+            )
         if profile.endpoint is None:
             raise StartError(
                 "This profile names no endpoint, so there is no "
@@ -419,6 +428,7 @@ class SphinxController:
             pass  # the live state is in memory; the record is retried at disconnect
         self._vpn_active = True
         self._vpn_profile_name = profile_name
+        self._vpn_protocol = "wireguard"
         status = self._await_handshake()
         if status.connected:
             return status.message
@@ -426,6 +436,149 @@ class SphinxController:
         # stated plainly — NOT a failure that quietly unwraps to a
         # direct connection.
         return status.message
+
+    # --- OpenVPN (Phase 2) -------------------------------------------
+
+    def _connect_openvpn(self, profile, *, with_blocker: bool) -> str:
+        """Connect an OpenVPN profile through the user's installed
+        OpenVPN program, under the same mode model as WireGuard:
+
+        1. The engine's availability is the honest gate: no
+           installed OpenVPN is a named state with the remedy
+           (install it yourself, from openvpn.net), never a
+           silent failure and never a bundled copy.
+        2. The stored config is SANITIZED into a working copy
+           (core.openvpn_sanitize): directives that would run or
+           persist anything on this machine are removed, by name,
+           and the removals are recorded in the tunnel record and
+           surfaced in the status — no silent edits. The stored
+           profile is never edited.
+        3. The engine supervises openvpn.exe as this process's
+           child, with Sphinx's controlled flags only.
+           "Connected" is claimed only on the client's own proof
+           (management-interface CONNECTED / the completed-
+           initialization log line), read through status() —
+           never from the process having spawned.
+        4. DNS honesty: the server PUSHES DNS. In VPN + Blocker
+           the brain stays in front and the pushed set becomes
+           the forwarder's upstreams (reached via the tunnel).
+           In VPN only, the pushed set is accepted as the
+           server's DNS and applied as TUNNEL-record state
+           (saved first, verified, restored exactly), and the
+           status says whose DNS is in force. No DNS change
+           rides outside the record.
+        """
+        manager = self._openvpn_manager
+        profile_name = profile.name
+        if manager is None:
+            raise StartError(OPENVPN_NOT_INSTALLED_MESSAGE)
+        available, reason = manager.availability()
+        if not available:
+            raise StartError(reason)
+        if not manager.is_elevated():
+            raise TunnelNotElevated(
+                "Connecting a VPN needs administrator rights: "
+                "Windows will ask with its standard prompt when "
+                "Sphinx is restarted as administrator (the window "
+                "and tray offer that action). If you decline the "
+                "prompt, Sphinx stays off and does not ask again in "
+                "a loop. Nothing was changed."
+            )
+        if self._vpn_active:
+            if self._vpn_profile_name == profile_name:
+                return f"VPN is already connected to {profile_name}."
+            self.disconnect_vpn()  # one tunnel at a time, ordinary path
+
+        sanitized = sanitize_openvpn_config(profile.config_text)
+        mode_before = "blocker" if self.running else "off"
+        state = TunnelState(
+            profile_name=profile_name,
+            mode_before_vpn=mode_before,
+            with_blocker=with_blocker,
+            intent=False,
+            pinned_endpoint=profile.endpoint,
+            protocol="openvpn",
+            sanitized_removed=list(sanitized.removed),
+        )
+        blocker_started_here = False
+        blocker_stopped_here = False
+        tunnel_started = False
+        try:
+            if with_blocker:
+                if not self.running:
+                    self.start()
+                    blocker_started_here = True
+            else:
+                if self.running:
+                    # The brain is not in the VPN-only path; the
+                    # blocker stops through its ordinary path and
+                    # disconnect returns to it, per mode_before.
+                    self.stop()
+                    blocker_stopped_here = True
+            # The record lands BEFORE the client starts (save-
+            # first, like every Sphinx discipline).
+            self.tunnel_store.save_state(state)
+            manager.up(profile, sanitized_config=sanitized.text)
+            tunnel_started = True
+            pushed = list(manager.pushed_dns())
+            state.dns_applied = pushed
+            state.openvpn_pid = getattr(manager, "process_id", None)
+            if pushed:
+                if with_blocker:
+                    # The brain stays in front; the pushed set is
+                    # its upstream set, via the tunnel.
+                    self.engine.set_forwarder(
+                        self._vpn_forwarder_factory(list(pushed))
+                    )
+                else:
+                    # Accepted as the server's DNS, applied under
+                    # the tunnel record only (saved first,
+                    # verified, restored exactly at disconnect).
+                    self._engage_tunnel_dns(
+                        profile, state, dns_servers=pushed
+                    )
+            self.tunnel_store.save_state(state)
+        except TunnelNotElevated:
+            if tunnel_started:
+                self._down_openvpn_quietly(manager)
+            self._undo_failed_connect(
+                state, blocker_started_here, blocker_stopped_here
+            )
+            raise
+        except Exception as e:
+            if tunnel_started:
+                self._down_openvpn_quietly(manager)
+            self._undo_failed_connect(
+                state, blocker_started_here, blocker_stopped_here
+            )
+            if isinstance(e, StartError):
+                raise
+            raise StartError(
+                f"The VPN could not be started ({e}). Nothing is "
+                "left half-connected."
+            ) from e
+        state.intent = True
+        try:
+            self.tunnel_store.save_state(state)
+        except TunnelStoreError:
+            pass  # the live state is in memory; retried at disconnect
+        self._vpn_active = True
+        self._vpn_profile_name = profile_name
+        self._vpn_protocol = "openvpn"
+        status = self._await_handshake()
+        if status.connected:
+            return status.message + " " + sanitized.removal_summary()
+        # Started but no establishment proof: the kill-switch
+        # state, stated plainly — NOT a failure that quietly
+        # unwraps to a direct connection.
+        return status.message + " " + sanitized.removal_summary()
+
+    @staticmethod
+    def _down_openvpn_quietly(manager) -> None:
+        try:
+            manager.down()
+        except Exception:
+            pass
 
     def _undo_failed_connect(
         self,
@@ -475,17 +628,44 @@ class SphinxController:
             state = self.tunnel_store.load_state()
         except TunnelStoreError as e:
             raise StartError(str(e)) from e
-        # 1. Tunnel down first.
-        if self._tunnel_manager is not None:
+        # 1. Tunnel down first — through the manager that owns
+        # this session's protocol (the record says which; a live
+        # session's in-memory protocol agrees with it).
+        protocol = (
+            state.protocol if state is not None
+            else (self._vpn_protocol or "wireguard")
+        )
+        manager = (
+            self._openvpn_manager if protocol == "openvpn"
+            else self._tunnel_manager
+        )
+        if manager is not None:
             try:
-                self._tunnel_manager.down()
+                manager.down()
             except Exception as e:
                 raise StartError(
                     f"The tunnel could not be taken down ({e}). It "
                     "was left as it is rather than half-stopped."
                 ) from e
+            if (
+                protocol == "openvpn"
+                and state is not None
+                and state.openvpn_pid
+                and hasattr(manager, "terminate_pid")
+            ):
+                # A leftover OpenVPN session's child may outlive
+                # the host that spawned it. The record names its
+                # pid; ending exactly that recorded process —
+                # never a stranger's — is part of taking this
+                # tunnel down. Best-effort: a pid already gone is
+                # the ordinary case after a clean host quit.
+                try:
+                    manager.terminate_pid(state.openvpn_pid)
+                except Exception:
+                    pass
         self._vpn_active = False
         self._vpn_profile_name = None
+        self._vpn_protocol = None
         # 2. DNS restore: the tunnel record's own originals (VPN
         # only), exactly, verified adapter by adapter.
         if state is not None and state.dns_originals:
@@ -528,14 +708,34 @@ class SphinxController:
         # connect measures its own pre-mode from that same state.
         return self.connect_vpn(name, with_blocker=with_blocker)
 
+    def _active_backend_status(self, state):
+        """The live backend report for the ACTIVE session, from
+        the manager that owns its protocol. For OpenVPN this is
+        also the monitor path: the tray polls vpn_status() every
+        second, and an openvpn.exe that died on its own shows up
+        here as exited_unexpectedly on the very next poll — the
+        death is noticed by the status path, never slept on."""
+        protocol = self._vpn_protocol or (
+            state.protocol if state is not None else "wireguard"
+        )
+        manager = (
+            self._openvpn_manager if protocol == "openvpn"
+            else self._tunnel_manager
+        )
+        if manager is None:
+            from ..tunnelmgmt.base import TunnelStatus
+
+            return TunnelStatus(adapter_up=False)
+        return manager.status()
+
     def vpn_status(self) -> VpnStatus:
-        if self._tunnel_manager is None:
+        if self._tunnel_manager is None and self._openvpn_manager is None:
             return VpnStatus(message="VPN mode is not available in this build.")
         try:
             state = self.tunnel_store.load_state()
         except TunnelStoreError as e:
             return VpnStatus(leftover=True, message=str(e))
-        backend = self._tunnel_manager.status()
+        backend = self._active_backend_status(state)
         if not self._vpn_active:
             if state is not None:
                 return VpnStatus(
@@ -553,6 +753,9 @@ class SphinxController:
             return VpnStatus(message="VPN is off.")
         name = self._vpn_profile_name or (state.profile_name if state else None)
         with_blocker = bool(state and state.with_blocker)
+        is_openvpn = bool(
+            state is not None and state.protocol == "openvpn"
+        ) or self._vpn_protocol == "openvpn"
         if backend.adapter_up and backend.handshake_fresh():
             facts = f"VPN on — {name}."
             if with_blocker:
@@ -562,12 +765,84 @@ class SphinxController:
                     " Ads are not blocked in this mode: DNS is "
                     "unfiltered while VPN-only is on."
                 )
+            if is_openvpn and state is not None:
+                # DNS honesty for OpenVPN (whose DNS arrives as a
+                # server push): the status says WHOSE DNS is in
+                # force, in each mode.
+                pushed = list(state.dns_applied)
+                if with_blocker:
+                    if pushed:
+                        facts += (
+                            " DNS is questioned by the filter "
+                            "first, then answered by the server's "
+                            f"pushed DNS ({', '.join(pushed)}), "
+                            "reached through the tunnel."
+                        )
+                    else:
+                        facts += (
+                            " The server pushed no DNS, so allowed "
+                            "lookups go to the filter's usual "
+                            "resolvers, reached through the tunnel."
+                        )
+                else:
+                    if pushed:
+                        facts += (
+                            " DNS in force: the server's own, "
+                            f"pushed by the server ({', '.join(pushed)}) "
+                            "and accepted as the server's — "
+                            "unfiltered."
+                        )
+                    else:
+                        facts += (
+                            " The server pushed no DNS, so the "
+                            "machine's existing DNS is in force, "
+                            "reached through the tunnel — unfiltered."
+                        )
+                if state.sanitized_removed:
+                    facts += (
+                        " Sphinx removed these unsafe config lines "
+                        "before connecting: "
+                        + ", ".join(state.sanitized_removed)
+                        + "."
+                    )
             return VpnStatus(
                 active=True,
                 connected=True,
                 profile_name=name,
                 with_blocker=with_blocker,
                 message=facts,
+                rx_bytes=backend.rx_bytes,
+                tx_bytes=backend.tx_bytes,
+            )
+        if is_openvpn and getattr(backend, "exited_unexpectedly", False):
+            # The OpenVPN kill-switch posture, honestly leveled:
+            # openvpn.exe removes its own routes when it exits, so
+            # Sphinx cannot blackhole routes it no longer owns.
+            # What Sphinx DOES hold is the DNS posture: nothing is
+            # silently restored to a direct connection — the DNS
+            # Sphinx placed for this tunnel (the filter's
+            # loopback, or the server's pushed set under the
+            # tunnel record) stays exactly where it was placed,
+            # the state announces itself here (the tray polls this
+            # status), and the user's two choices are the ones
+            # below. Disconnect restores everything, exactly,
+            # through the ordinary path.
+            return VpnStatus(
+                active=True,
+                blocked=True,
+                profile_name=name,
+                with_blocker=with_blocker,
+                message=(
+                    "VPN disconnected — the OpenVPN program exited "
+                    "unexpectedly, and Sphinx is not claiming a "
+                    "connection. Nothing was silently put back: "
+                    "your DNS stays where Sphinx placed it for "
+                    "this tunnel, in the blocked posture, and it "
+                    "was not restored to a direct connection as if "
+                    "nothing happened. Reconnect, or disconnect "
+                    "intentionally to return to the mode you had "
+                    "before the VPN."
+                ),
                 rx_bytes=backend.rx_bytes,
                 tx_bytes=backend.tx_bytes,
             )
@@ -592,11 +867,14 @@ class SphinxController:
 
     # --- VPN-only DNS (tunnel-record state, never the DNS backup) -----
 
-    def _engage_tunnel_dns(self, profile, state: TunnelState) -> None:
-        """Point the machine's DNS at the profile's servers, for
-        VPN-only mode. The originals are saved into the TUNNEL
-        state record and read back before anything changes; the
-        DNS guard's dns-backup.json is not involved in any way."""
+    def _engage_tunnel_dns(self, profile, state: TunnelState, dns_servers=None) -> None:
+        """Point the machine's DNS at the given servers, for
+        VPN-only mode — the profile's own DNS servers for
+        WireGuard, or the server's PUSHED set for OpenVPN. The
+        originals are saved into the TUNNEL state record and read
+        back before anything changes; the DNS guard's
+        dns-backup.json is not involved in any way."""
+        servers = list(dns_servers) if dns_servers is not None else list(profile.dns)
         manager = self._dns_manager
         adapters = manager.active_adapters()
         if not adapters:
@@ -606,12 +884,12 @@ class SphinxController:
             )
         originals = [a.to_dict() for a in adapters]
         state.dns_originals = originals
-        state.dns_applied = list(profile.dns)
+        state.dns_applied = servers
         # Save first, verified (save_state reads back): no
         # verified record of the originals, no change.
         self.tunnel_store.save_state(state)
-        v4 = [d for d in profile.dns if ":" not in d]
-        v6 = [d for d in profile.dns if ":" in d]
+        v4 = [d for d in servers if ":" not in d]
+        v6 = [d for d in servers if ":" in d]
         changed: List[AdapterDns] = []
         try:
             for adapter in adapters:

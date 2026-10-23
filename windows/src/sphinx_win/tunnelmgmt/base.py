@@ -42,6 +42,11 @@ class TunnelStatus:
     latest_handshake_ms: Optional[int] = None  # unix ms; None = never
     rx_bytes: int = 0
     tx_bytes: int = 0
+    #: The backend's process/adapter died WITHOUT being told to
+    #: (OpenVPN: the supervised child exited on its own). This is
+    #: the fact the kill-switch posture hangs off for backends
+    #: whose teardown removes their routes when they die.
+    exited_unexpectedly: bool = False
 
     def handshake_fresh(self, now_ms: Optional[int] = None) -> bool:
         if self.latest_handshake_ms is None:

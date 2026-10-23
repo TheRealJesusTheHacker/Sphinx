@@ -62,6 +62,9 @@ def default_data_dir() -> Path:
 def build_controller(data_dir: Path) -> SphinxController:
     store = Store(data_dir)
     manager = WindowsDnsManager()
+    from sphinx_win.tunnelmgmt.openvpn_windows_impl import (
+        WindowsOpenVpnManager,
+    )
     from sphinx_win.tunnelmgmt.windows_impl import WindowsTunnelManager
 
     return SphinxController(
@@ -69,6 +72,7 @@ def build_controller(data_dir: Path) -> SphinxController:
         manager,
         data_dir,
         tunnel_manager=WindowsTunnelManager(),
+        openvpn_manager=WindowsOpenVpnManager(work_dir=Path(data_dir)),
     )
 
 
@@ -108,7 +112,8 @@ def restore_dns_main(data_dir=None, manager_factory=None, out=print) -> int:
 
 
 def restore_vpn_main(data_dir=None, tunnel_manager_factory=None,
-                     dns_manager_factory=None, out=print) -> int:
+                     dns_manager_factory=None, out=print,
+                     openvpn_manager_factory=None) -> int:
     """The headless VPN teardown: if Sphinx holds a tunnel state
     record, take the tunnel down and restore exactly what the
     record holds (a VPN-only session's DNS originals), verifying
@@ -131,7 +136,11 @@ def restore_vpn_main(data_dir=None, tunnel_manager_factory=None,
     it asks the manager to take down any adapter THIS process
     holds (a fresh headless process holds none), and restores
     the record's DNS, verified — the part an uninstall must not
-    leave behind even when the host is already gone."""
+    leave behind even when the host is already gone. For an
+    OpenVPN session (Phase 2) the same shape holds one step
+    further: the record names the supervised openvpn.exe child's
+    pid, and this path terminates exactly that recorded pid after
+    asking the OpenVPN manager to stop its own child."""
     data_dir = Path(data_dir) if data_dir is not None else default_data_dir()
     try:
         tunnel_store = TunnelStore(data_dir)
@@ -149,6 +158,31 @@ def restore_vpn_main(data_dir=None, tunnel_manager_factory=None,
             manager.down()
         except Exception:
             pass  # the record-level restore below is the verified part
+        if getattr(state, "protocol", "wireguard") == "openvpn":
+            # An OpenVPN session is torn down too: the supervised
+            # child belongs to the tray host (whose quit path
+            # disconnects first), but the record holds the child's
+            # pid, so this headless path can end a Sphinx-started
+            # openvpn.exe even when the host is already gone —
+            # never a stranger's process: only the recorded pid.
+            try:
+                if openvpn_manager_factory is not None:
+                    ovpn = openvpn_manager_factory()
+                else:
+                    from sphinx_win.tunnelmgmt.openvpn_windows_impl import (
+                        WindowsOpenVpnManager,
+                    )
+
+                    ovpn = WindowsOpenVpnManager()
+                try:
+                    ovpn.down()
+                except Exception:
+                    pass
+                pid = getattr(state, "openvpn_pid", None)
+                if pid and hasattr(ovpn, "terminate_pid"):
+                    ovpn.terminate_pid(pid)
+            except Exception:
+                pass  # the record-level restore below is the verified part
         if state.dns_originals:
             dns_manager = (dns_manager_factory or WindowsDnsManager)()
             failed = []
