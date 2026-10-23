@@ -102,7 +102,7 @@ class WgProfile(
 
     override fun withName(newName: String?): WgProfile {
         val lines = rawLines.toMutableList()
-        val hasComment = lines.isNotEmpty() && isSphinxNameComment(lines[0])
+        val hasComment = lines.isNotEmpty() && TunnelProfileParser.isSphinxNameComment(lines[0])
         val clean = newName?.trim()?.takeIf { it.isNotEmpty() }
         when {
             clean != null && hasComment -> lines[0] = "# Sphinx profile: $clean"
