@@ -1,10 +1,12 @@
 package com.sentinelsafeguard.sphinx.lists
 
 import android.content.Context
+import com.sentinelsafeguard.sphinx.core.ProfileSources
 import com.sentinelsafeguard.sphinx.core.ServerProfile
 import com.sentinelsafeguard.sphinx.core.SphinxMode
 import com.sentinelsafeguard.sphinx.core.TunnelParseResult
 import com.sentinelsafeguard.sphinx.core.TunnelProfileParser
+import com.sentinelsafeguard.sphinx.core.VpnGate
 import com.wireguard.crypto.KeyPair
 import java.io.File
 
@@ -99,7 +101,49 @@ class TunnelStore(context: Context) {
      *  service degrades it to a leftover, per TUNNEL-SPEC). */
     fun deleteProfile(name: String): Boolean {
         val file = fileFor(name.trim())
-        return file.isFile && file.delete()
+        val deleted = file.isFile && file.delete()
+        if (deleted) recordProfileSource(name.trim(), null)
+        return deleted
+    }
+
+    // --- Profile sources (Phase 2: where a profile came from) ----
+
+    /** The recorded source of a stored profile — [VpnGate.SOURCE_VPNGATE]
+     *  for directory imports, null for the user's own profiles.
+     *  A label only: it drives the source line in the picker and
+     *  the disclosure riding again at a connect attempt. */
+    fun profileSource(name: String): String? =
+        ProfileSources.decode(prefs.getString(KEY_PROFILE_SOURCES, null))[name.trim()]
+
+    fun recordProfileSource(name: String, source: String?) {
+        val current = ProfileSources.decode(
+            prefs.getString(KEY_PROFILE_SOURCES, null)
+        ).toMutableMap()
+        if (source == null) current.remove(name) else current[name] = source
+        prefs.edit()
+            .putString(KEY_PROFILE_SOURCES, ProfileSources.encode(current))
+            .apply()
+    }
+
+    /**
+     * Save a VPN Gate directory row as a profile, through this
+     * store's ordinary import path (the Phase 1 OpenVPN record
+     * path — it displays with the existing OpenVPN note), with
+     * its source recorded as [VpnGate.SOURCE_VPNGATE]. The
+     * profile's name is the row's public-server label. Returns
+     * the import result; a refused import records nothing.
+     */
+    fun importVpnGateProfile(row: VpnGate.Row): TunnelParseResult {
+        val text = VpnGate.importTextFor(row)
+            ?: return TunnelParseResult.Refused("unrecognized-format")
+        val result = importProfile(text)
+        if (result is TunnelParseResult.Valid) {
+            val storedName = result.profile.name?.trim()?.takeIf { it.isNotEmpty() }
+            if (storedName != null) {
+                recordProfileSource(storedName, VpnGate.SOURCE_VPNGATE)
+            }
+        }
+        return result
     }
 
     /** The profile's config text for a user-explicit export
@@ -237,5 +281,6 @@ class TunnelStore(context: Context) {
         private const val KEY_STATE_INTENT = "tunnel_state_intent"
         private const val KEY_STATE_BLOCKER = "tunnel_state_blocker"
         private const val KEY_STATE_PRE_VPN = "tunnel_state_pre_vpn"
+        private const val KEY_PROFILE_SOURCES = "profile_sources"
     }
 }
