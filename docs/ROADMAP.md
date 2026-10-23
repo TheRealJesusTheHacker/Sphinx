@@ -480,14 +480,30 @@ honesty rules hold (names, not content; nothing leaves the device).
   which does not exist yet, and no debug-signed build ships. The
   three real-machine passes named in the release notes (Android
   phone, Windows machine, Debian machine) remain owed.
+- **v1.0.1 — PUBLISHED 2026-10-23.** The fix release:
+  https://github.com/TheRealJesusTheHacker/Sphinx/releases/tag/v1.0.1
+  (release id 422099166, tag `v1.0.1` on HEAD
+  `00b3a6760166`). Assets: `SphinxSetup.exe`, `Sphinx.exe`,
+  `SphinxPortable.zip` (Windows v0.3.1), `sphinx_0.2.1_all.deb`
+  (Debian 0.2.1), and `SHA256SUMS.txt` — built by the release
+  workflow (run 39991150614) on the tagged commit; every asset
+  re-downloaded and its sha256 verified against
+  `SHA256SUMS.txt` and the API digests, the portable's inner
+  exe byte-identical to the standalone. This release carries
+  the twelve fix-wave commits below and the Fleet Sweep #4
+  Debian parity fixes (liveness proof, atomic-write
+  durability). Android is not in this release either — the
+  release keystore still does not exist — and the three
+  real-machine passes remain owed.
 - **Post-v1.0.0 fix wave — on `main`, NOT in v1.0.0.** The twelve
   fix-wave commits after `f1afdffc8c27` (W-1–W-7 Windows
   restore-discipline fixes, the Android truncated-answer TCP
   completion and its forwarder hardening, the Android
   quick-settings tile, and R-17 installer branding) landed after
-  the v1.0.0 tag was cut. They are in no release yet and ship in
-  a later one; nothing in this roadmap should be read as putting
-  them in v1.0.0. (The Phase 4 note further up that lists the
+  the v1.0.0 tag was cut. They shipped in v1.0.1 (above);
+  nothing in this roadmap should be read as putting them in
+  v1.0.0. (The Phase 4 note further up that lists the
   quick-settings tile as future work is the phase record as it
-  stood when Phase 4 closed; the tile has since been built, on
-  `main` only.)
+  stood when Phase 4 closed; the tile has since been built and
+  its code is in the v1.0.1 tag — the Android edition itself
+  still ships nothing, per the v1.0.1 record above.)
