@@ -63,7 +63,7 @@ def test_metadata(built):
     import sphinx_deb
 
     assert _field(built, "Package") == "sphinx"
-    assert _field(built, "Version") == sphinx_deb.__version__ == "0.2.0"
+    assert _field(built, "Version") == sphinx_deb.__version__ == "0.2.1"
     # Pure Python + data: architecture "all" is the honest answer.
     assert _field(built, "Architecture") == "all"
 
