@@ -185,8 +185,10 @@ a release as soon as that one owner step is done; no
 debug-signed build ships in its place.
 
 Fixes landed on `main` after the v1.0.0 commit — the
-quick-settings tile, truncated-answer completion over TCP, and
-the Windows W-1–W-7 restore-discipline fixes, among others — are
+quick-settings tile, truncated-answer completion over TCP, the
+Windows W-1–W-7 restore-discipline fixes, and the Fleet Sweep #4
+Debian parity fixes (the liveness-proof timeout and the atomic-
+write durability fixes, carried to the Debian edition) — are
 **not** in v1.0.0. They ship in a later release.
 
 ## Building

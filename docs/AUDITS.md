@@ -8,6 +8,90 @@ never merely to make a report prettier).
 
 ---
 
+## Fleet Sweep #4 — Debian parity with the W-fix wave + supply-chain pinning (2026-10-23)
+
+Scope: the whole repo (all three editions) re-audited against
+FILTER-SPEC, the Sweep #3 fix wave, and the fleet's briefing-lens
+checks (edge surfaces, supply chain, patch lag, credential
+hygiene, backup claims). Baselines reproduced first-hand before
+any change: Windows suite 195 passed / 4 skipped, Debian suite
+144 passed / 9 skipped (sandbox UDP/permission skips, covered by
+CI). The Android JVM suite could not be run in the sweep sandbox
+(no JDK/Android SDK there) — stated plainly, not estimated.
+
+### Fixed
+
+1. **The Debian liveness proof could fail a healthy filter
+   (W-6 parity).** Sweep #3's W-6 raised the Windows proof
+   timeout above the forwarder's worst case (one 3-second timeout
+   per upstream resolver), because the proof queries an allowed
+   name and its answer comes back through that forwarder. The
+   Debian port still carried the old 2-second default — and its
+   control-socket client gave up at 3 seconds besides — so on a
+   machine whose first upstream was unreachable and whose second
+   was slow, `sphinx engage` could refuse a filter that was
+   answering fine. Debian now carries the same `PROOF_TIMEOUT_S`
+   (resolvers × timeout + 1s), the control client waits
+   `PROOF_REQUEST_TIMEOUT_S` for proof replies, and the guard's
+   proofer asks with that budget. Pins: the default exceeds the
+   worst case, a 3-second-slow upstream still proves, and the
+   request budget exceeds the proof budget.
+   *(debian/src/sphinx_deb/core/server.py, control.py,
+   resolver/proof.py; tests in test_server.py / test_control.py)*
+2. **The Debian atomic writes were the pre-W-4 helper
+   (W-4 parity).** Both Debian copies of `write_atomically` —
+   the rule/list store's and the resolver systemview's (the one
+   that writes the guard's DNS record and resolv.conf) — wrote
+   without fsync, so a rename could reach disk before the data
+   did; and the store's copy swallowed a failed staged rename,
+   so callers reported success for a save that never landed.
+   Both helpers now fsync the file and its directory and raise
+   on final failure; the CLI turns that raise into a plain
+   refusal instead of a traceback or a false success. The
+   systemview fallback path also no longer leaves its temp file
+   behind. Pin: fsync observed, final-failure raises, old file
+   byte-identical, no temps left. *(core/store.py,
+   resolver/systemview.py, cli.py; test in test_store.py)*
+3. **CI actions are SHA-pinned.** Both Sphinx workflows used
+   floating major tags for checkout / setup-python /
+   upload-artifact; they now pin the exact commits those tags
+   resolve to (the convention the HackProof workflow already
+   follows), with the tag named in a comment.
+   *(.github/workflows/sphinx-windows.yml, sphinx-debian.yml)*
+
+### Verified clean
+
+- Secrets scan of the full tree: no hits. No hardcoded or
+  default credentials anywhere; the only admin surface in the
+  fleet cluster (HackProof payments, audited alongside) is
+  token-gated and disabled when unconfigured.
+- pip-audit over every Python requirement set in the repo: no
+  known vulnerabilities.
+- Listening surfaces: Android is a local VPN-mode filter (the
+  system binds it via BIND_VPN_SERVICE; it opens no inbound
+  listener — its only sockets are the protected outbound
+  forwarder and the TUN interface); Windows and Debian bind
+  loopback only; the Debian control socket is a Unix socket,
+  mode 0660, exposing exactly two read-only commands (proof,
+  stats). No management interface is exposed anywhere.
+- List supply chain, honestly: fetched lists travel HTTPS only
+  with every redirect hop vetted, are fully parsed and must
+  clear the ≥1,000-unique-domain sanity gate before an atomic
+  swap, a failed source changes nothing, and the bundled list
+  is the floor. There is no cryptographic signature on upstream
+  lists — TLS plus the parse/gate discipline is the mechanism,
+  and it is stated as such rather than dressed up.
+- The DNS record Sphinx keeps is a restore point on the same
+  machine and is described as exactly that — never as an
+  isolated or immutable backup.
+
+Final tallies after the fixes: Debian suite 147 passed /
+10 skipped (one run showed 9 — the sandbox's UDP skips vary
+by run; CI covers them); Windows suite unchanged at 195 passed /
+4 skipped (no Windows code touched).
+
+---
+
 ## Debian Phase 2 audit — FILTER-SPEC parity + resumption (2026-10-21)
 
 Scope: the Debian edition's Phase 2 (commits 1a889fc..8be56d0):
