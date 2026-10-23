@@ -51,15 +51,12 @@ REFUSAL_NAME_REQUIRED = "name-required"
 
 NAME_COMMENT_PREFIX = "# Sphinx profile:"
 
-#: Why an OpenVPN profile cannot connect in Phase 1 — named, per
-#: TUNNEL-SPEC ("refused at connect time with a plain explanation").
-OPENVPN_PHASE2_REASON = "openvpn-connects-in-phase-2"
-OPENVPN_PHASE2_MESSAGE = (
-    "This is an OpenVPN profile. Sphinx stores and labels OpenVPN "
-    "profiles in Phase 1, but connecting one arrives in Phase 2 "
-    "(it will use the system OpenVPN program, at arm's length). "
-    "Nothing was connected."
-)
+#: Phase 1 named the OpenVPN refusal here; Phase 2 connects
+#: OpenVPN profiles through the user's installed OpenVPN program
+#: (tunnelmgmt.openvpn_base — the honest missing-client message
+#: lives there now, as OPENVPN_NOT_INSTALLED_MESSAGE). These
+#: spellings stay as a record of the Phase 1 refusal vocabulary;
+#: nothing in the connect path raises them any more.
 
 
 class TunnelRefusal(ValueError):
@@ -282,15 +279,26 @@ class WireGuardProfile:
 
 @dataclass
 class OpenVpnProfile:
-    """An OpenVPN server profile: a stored, labeled record in
-    Phase 1 (TUNNEL-SPEC). The config text is preserved losslessly;
-    connecting is refused with the reason named (Phase 2)."""
+    """An OpenVPN server profile (TUNNEL-SPEC). The config text is
+    preserved losslessly in the store; connecting (Phase 2) runs
+    the user's installed OpenVPN program over a SANITIZED working
+    copy (core.openvpn_sanitize) — the stored text is never the
+    text the client runs, and never edited by sanitization."""
 
     name: Optional[str]
     endpoint: Optional[str]
     config_text: str = field(repr=False)
     protocol: str = field(default="openvpn", init=False)
     scope: str = field(default="all", init=False)
+
+    @property
+    def dns(self) -> List[str]:
+        """An OpenVPN profile names no DNS of its own: DNS arrives
+        as the server's PUSH at connect time (the engine reports
+        it; the mode model applies it under the tunnel record).
+        This empty list keeps the mode model's shape honest —
+        nothing is claimed before the push exists."""
+        return []
 
     def to_config_text(self) -> str:
         text = self.config_text

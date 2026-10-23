@@ -74,6 +74,19 @@ class TunnelState:
     #: exactly through the tunnel record (never the DNS backup).
     dns_originals: List[dict] = field(default_factory=list)
     dns_applied: List[str] = field(default_factory=list)
+    #: Phase 2: which protocol this session runs ("wireguard" for
+    #: every Phase 1 record; the field is absent there and reads
+    #: back as the default).
+    protocol: str = "wireguard"
+    #: For OpenVPN sessions: the config directives the sanitizer
+    #: removed before connecting, by name — the removal record is
+    #: part of the session's truth, surfaced in its status, never
+    #: a silent edit (core.openvpn_sanitize).
+    sanitized_removed: List[str] = field(default_factory=list)
+    #: For OpenVPN sessions: the supervised openvpn.exe child's
+    #: pid, so the headless uninstall teardown can end a
+    #: Sphinx-started client even when the tray host is gone.
+    openvpn_pid: Optional[int] = None
 
     def to_dict(self) -> dict:
         return {
@@ -85,6 +98,9 @@ class TunnelState:
             "pinned_endpoint": self.pinned_endpoint,
             "dns_originals": [dict(d) for d in self.dns_originals],
             "dns_applied": list(self.dns_applied),
+            "protocol": self.protocol,
+            "sanitized_removed": list(self.sanitized_removed),
+            "openvpn_pid": self.openvpn_pid,
         }
 
     @classmethod
@@ -109,6 +125,13 @@ class TunnelState:
             raise TunnelStoreError(
                 "the tunnel state record's saved DNS settings are damaged"
             )
+        protocol = raw.get("protocol", "wireguard")
+        if protocol not in ("wireguard", "openvpn"):
+            raise TunnelStoreError(
+                f"the tunnel state record names an unknown "
+                f"protocol ({protocol!r})"
+            )
+        pid = raw.get("openvpn_pid")
         return cls(
             profile_name=name,
             mode_before_vpn=mode_before,
@@ -117,6 +140,11 @@ class TunnelState:
             pinned_endpoint=raw.get("pinned_endpoint"),
             dns_originals=[dict(d) for d in originals],
             dns_applied=[str(s) for s in raw.get("dns_applied", [])],
+            protocol=protocol,
+            sanitized_removed=[
+                str(s) for s in raw.get("sanitized_removed", [])
+            ],
+            openvpn_pid=int(pid) if isinstance(pid, int) else None,
         )
 
 
