@@ -332,6 +332,14 @@ class MainActivity : Activity() {
         store.saveSources(sources)
         sourcesEdit.setText(sources.joinToString("\n") { it.url })
         toast(getString(R.string.sources_saved))
+        // The running filter questions with the lists it loaded at
+        // start; a source change alters which downloaded lists are
+        // in force (a removed source's file is pruned by the save),
+        // so — like every other list-affecting edit on this screen —
+        // the service must reload, or it would keep questioning with
+        // a removed source's list while the status line, which reads
+        // the store, already shows the new set.
+        notifyServiceReload()
         refreshListStatus()
     }
 
