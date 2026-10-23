@@ -7,9 +7,11 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import com.sentinelsafeguard.sphinx.MainActivity
 import com.sentinelsafeguard.sphinx.R
 import com.sentinelsafeguard.sphinx.core.AppRules
@@ -47,11 +49,15 @@ import java.util.concurrent.atomic.AtomicLong
  * back into the VPN) and the real answer is written back into the TUN.
  *
  * There is no remote VPN server. Nothing leaves the phone except the
- * allowed DNS queries themselves (to the public resolver — exactly
- * where they would have gone without Sphinx) and, when the user taps
- * "Update lists now", HTTPS fetches of the blocklist sources shown in
- * the app. The query log is memory-only, on this device, and can be
- * turned off in the app.
+ * allowed DNS queries themselves — to the public resolvers first,
+ * and, if those can't be reached from this network, to the DNS
+ * servers the phone itself was using when the filter engaged
+ * (captured before the interface came up; the governing rule is
+ * that an allowed query degrades toward the network's own
+ * resolution, never toward silence) — and, when the user taps
+ * "Update lists now", HTTPS fetches of the blocklist sources shown
+ * in the app. The query log is memory-only, on this device, and
+ * can be turned off in the app.
  *
  * Phase 3 per-app rules change the capture shape, per
  * docs/FILTER-SPEC.md ("Per-app rules"). With no app blocked outright,
@@ -91,8 +97,7 @@ class SphinxVpnService : VpnService() {
         private const val OWNER_CACHE_CAP = 512
         private const val OWNER_CACHE_TTL_NANOS = 60_000_000_000L // 60 s
         private const val WORK_QUEUE_CAP = 512
-
-        private val UPSTREAM_RESOLVERS = listOf("1.1.1.1", "9.9.9.9")
+        private const val SYSTEM_DNS_REFRESH_MS = 30_000L
 
         @Volatile
         var isRunning: Boolean = false
@@ -161,12 +166,41 @@ class SphinxVpnService : VpnService() {
     @Volatile
     private var logEnabled = true
 
+    // The DNS servers the phone itself was using, read from the
+    // non-VPN networks (see captureSystemDns). Captured BEFORE the
+    // interface is established — once Sphinx is up, the system's
+    // DNS is Sphinx — and refreshed when the snapshot goes stale,
+    // so a network change (Wi-Fi ↔ mobile) heals it. These are the
+    // floor of the upstream chain: the resolvers that provably
+    // answered this phone a moment ago.
+    @Volatile
+    private var capturedSystemDns: List<InetAddress> = emptyList()
+
+    @Volatile
+    private var systemDnsCapturedAtMs: Long = 0L
+
     override fun onCreate() {
         super.onCreate()
         store = ListStore(this)
         Thread({
-            reloadListsNow()
-            listsReady.countDown()
+            try {
+                reloadListsNow()
+            } catch (e: Exception) {
+                // One retry before giving up: a transient storage
+                // hiccup must not decide whether the filter can run.
+                // If the load still fails, filterLists stays null,
+                // the latch still falls (finally), and startFilter
+                // refuses to establish — a filter that cannot
+                // question must never capture the phone's DNS and
+                // then answer nothing at all.
+                try {
+                    reloadListsNow()
+                } catch (e2: Exception) {
+                    // Stays null; startFilter fails loud (stays off).
+                }
+            } finally {
+                listsReady.countDown()
+            }
         }, "sphinx-list-loader").start()
     }
 
@@ -252,10 +286,26 @@ class SphinxVpnService : VpnService() {
     }
 
     private fun startFilter() {
+        if (filterLists == null) {
+            // The lists never loaded (the loader retried and
+            // failed). Establishing now would capture the phone's
+            // DNS and answer nothing at all — no sinkholes, no
+            // forwards, a silent blackhole wearing the filter's
+            // name. Fail loud instead: stay off, and record that.
+            store.setFilterOnIntent(false)
+            stopSelf()
+            return
+        }
         if (workers.isShutdown) {
             workers = newWorkerPool()
         }
         startForegroundWithNotification()
+        // Save the originals first (the fleet's engage discipline):
+        // the phone's own DNS servers, captured before the
+        // interface exists — after establish() the system's DNS
+        // would read as Sphinx itself.
+        capturedSystemDns = captureSystemDns()
+        systemDnsCapturedAtMs = SystemClock.elapsedRealtime()
         val rules = store.loadAppRules()
         var mode = rules.captureMode()
         var builder = buildInterface(rules, mode)
@@ -450,6 +500,48 @@ class SphinxVpnService : VpnService() {
         return owner
     }
 
+    /**
+     * The DNS servers of every non-VPN network that offers
+     * internet — the phone's own resolvers, in the platform's
+     * order. Read from the live networks at capture time; whatever
+     * was gathered stands if the platform refuses partway, and an
+     * empty result simply leaves the upstream chain at its public
+     * head.
+     */
+    private fun captureSystemDns(): List<InetAddress> {
+        val manager = getSystemService(ConnectivityManager::class.java)
+            ?: return emptyList()
+        val servers = LinkedHashSet<InetAddress>()
+        try {
+            for (network in manager.allNetworks) {
+                val caps = manager.getNetworkCapabilities(network) ?: continue
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+                if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
+                manager.getLinkProperties(network)?.dnsServers?.let { servers.addAll(it) }
+            }
+        } catch (e: Exception) {
+            // Whatever was gathered stands.
+        }
+        return servers.toList()
+    }
+
+    /** The captured snapshot, refreshed when it is empty or older
+     *  than [SYSTEM_DNS_REFRESH_MS] — a network handover while the
+     *  filter runs must not strand the chain's floor on the
+     *  previous network's servers. A refresh that finds nothing
+     *  keeps the previous snapshot rather than emptying the floor. */
+    private fun systemDnsServers(): List<InetAddress> {
+        val age = SystemClock.elapsedRealtime() - systemDnsCapturedAtMs
+        if (capturedSystemDns.isEmpty() || age > SYSTEM_DNS_REFRESH_MS) {
+            val fresh = captureSystemDns()
+            if (fresh.isNotEmpty() || capturedSystemDns.isEmpty()) {
+                capturedSystemDns = fresh
+            }
+            systemDnsCapturedAtMs = SystemClock.elapsedRealtime()
+        }
+        return capturedSystemDns
+    }
+
     private fun handlePacket(packet: ByteArray, output: FileOutputStream) {
         // Nothing in here may throw: one malformed packet gets dropped,
         // never takes a worker — or the filter — down with it.
@@ -488,20 +580,24 @@ class SphinxVpnService : VpnService() {
     }
 
     /**
-     * Send a DNS query to the upstream resolvers; null if all fail.
-     * The exchange itself is [DnsForwarder] — the pure-Kotlin port
-     * of the Python editions' forwarder, JVM-tested there — with
-     * this service's protect() supplied so the upstream sockets
-     * (UDP, and TCP when a truncated answer is completed per
-     * RFC 7766) can't loop back into the VPN. Accept only the
-     * answer to *this* query: matching ID, QR (response) bit set —
-     * the same discipline every stub resolver applies
-     * (FILTER-SPEC.md, forwarding rules), enforced in the forwarder.
+     * Send a DNS query to the upstream chain; null if the whole
+     * chain fails. The exchange itself is [DnsForwarder] — the
+     * pure-Kotlin port of the Python editions' forwarder,
+     * JVM-tested there — fed with the chain the spec now requires:
+     * the public resolvers at the head and the phone's own DNS
+     * servers, captured at engage time, as the floor. This
+     * service's protect() is supplied — and its verdict honored
+     * by the forwarder — so the upstream sockets (UDP, and TCP
+     * when a truncated answer is completed per RFC 7766) can't
+     * loop back into the VPN. Accept only the answer to *this*
+     * query: matching ID, QR (response) bit set — the same
+     * discipline every stub resolver applies (FILTER-SPEC.md,
+     * forwarding rules), enforced in the forwarder.
      */
     private fun forward(query: ByteArray): ByteArray? =
         DnsForwarder.forwardQuery(
             query,
-            resolvers = UPSTREAM_RESOLVERS,
+            resolvers = DnsForwarder.upstreamChain(systemDnsServers()),
             timeoutMs = UPSTREAM_TIMEOUT_MS,
             port = DNS_PORT,
             protectUdp = { protect(it) },
