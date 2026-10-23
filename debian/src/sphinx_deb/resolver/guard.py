@@ -239,15 +239,23 @@ class BackupRecord:
             if original is None:
                 return None
             recorded_names = nameservers_in(original)
-            if recorded_names and all(is_loopback(n) for n in recorded_names):
-                return None  # a loopback "original" — never legitimate
+            if any(is_loopback(n) for n in recorded_names):
+                # ANY loopback in the recorded "original" refuses
+                # the record — not only the all-loopback shape.
+                # Engage refuses to record any current nameserver
+                # that is a loopback, mixed lists included, so a
+                # record containing one (127.0.0.53 beside a real
+                # server, say) is corrupt or hand-edited; restoring
+                # it byte-for-byte would faithfully restore a
+                # poisoned file. (Bug hunt 2026-10-23: the
+                # all-loopback check alone let mixed records
+                # through, here and in prior_servers below.)
+                return None
         if stack == STACK_RESOLVED:
             if not record.link:
                 return None
-            if record.prior_servers and all(
-                is_loopback(s) for s in record.prior_servers
-            ):
-                return None
+            if any(is_loopback(s) for s in record.prior_servers):
+                return None  # ANY loopback — see the direct case
         return record
 
 

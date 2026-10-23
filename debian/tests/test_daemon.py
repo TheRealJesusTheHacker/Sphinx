@@ -138,3 +138,71 @@ def test_the_first_load_failure_propagates(tmp_path):
     live = LiveLists(store)
     with pytest.raises(OSError):
         live.current()
+
+
+# --- The forwarding chain's floor (bug hunt 2026-10-23) -------------------
+
+
+class TestSystemResolvers:
+    """The daemon's floor provider: the machine's own DNS, from
+    the engage-time record while engaged (the live files then
+    point at the filter itself) and from the live resolver file
+    while not. Loopbacks never surface as floor entries."""
+
+    def _provider(self, tmp_path, view):
+        from sphinx_deb.daemon import SystemResolvers
+
+        return SystemResolvers(tmp_path, view=view)
+
+    def test_not_engaged_reads_the_live_resolver_file(self, tmp_path):
+        from conftest import FakeView
+
+        view = FakeView(resolv=b"nameserver 192.168.1.1\nnameserver 10.0.0.1\n")
+        assert self._provider(tmp_path, view)() == ["192.168.1.1", "10.0.0.1"]
+
+    def test_loopbacks_never_surface(self, tmp_path):
+        from conftest import FakeView
+
+        view = FakeView(resolv=b"nameserver 127.0.0.53\n")
+        assert self._provider(tmp_path, view)() == []
+
+    def test_engaged_direct_reads_the_record_not_the_live_file(self, tmp_path):
+        import base64
+        import hashlib
+
+        from conftest import FakeView
+
+        from sphinx_deb.resolver.guard import BackupRecord, DnsGuard
+
+        # Live, the file points at the filter; the record holds
+        # the original with the machine's own server.
+        view = FakeView(resolv=b"nameserver 127.0.0.1\n")
+        guard = DnsGuard(view, tmp_path)
+        record = BackupRecord(
+            stack="direct",
+            engaged_loopbacks=["127.0.0.1"],
+            resolv_conf_b64=base64.b64encode(
+                b"nameserver 192.168.1.1\n"
+            ).decode(),
+            resolv_conf_sha256=hashlib.sha256(
+                b"nameserver 192.168.1.1\n"
+            ).hexdigest(),
+        )
+        assert guard._save_backup_verified(record)
+        assert self._provider(tmp_path, view)() == ["192.168.1.1"]
+
+    def test_engaged_resolved_reads_the_records_prior_servers(self, tmp_path):
+        from conftest import stub_resolved_view
+
+        from sphinx_deb.resolver.guard import BackupRecord, DnsGuard
+
+        view = stub_resolved_view()
+        guard = DnsGuard(view, tmp_path)
+        record = BackupRecord(
+            stack="resolved",
+            engaged_loopbacks=["127.0.0.1"],
+            link="eth0",
+            prior_servers=["192.168.1.1"],
+        )
+        assert guard._save_backup_verified(record)
+        assert self._provider(tmp_path, view)() == ["192.168.1.1"]

@@ -35,7 +35,7 @@ from .core.server import DnsFilterServer, FilterEngine
 from .core.store import LiveState, Store
 from .core.validation import DEFAULT_MIN_DOMAINS
 from .resolver.guard import DnsGuard, DnsState
-from .resolver.systemview import RealSystemView, is_loopback
+from .resolver.systemview import RealSystemView, is_loopback, nameservers_in
 
 
 class ConfigError(RuntimeError):
@@ -179,6 +179,85 @@ class LiveLists:
         return self.current().lists
 
 
+class SystemResolvers:
+    """The forwarding chain's floor for the daemon: the machine's
+    own DNS servers (FILTER-SPEC's forwarding chain).
+
+    Where they come from, in order:
+
+    - While Sphinx is engaged, the engage-time record is the
+      truth — the direct stack's record holds the original
+      /etc/resolv.conf (its nameservers are the floor), and the
+      resolved stack's record holds the link's prior servers.
+      The live files cannot supply the floor then: the direct
+      file *is* the filter's loopbacks, and the link's live
+      servers are the override itself.
+    - While Sphinx is not engaged, the live resolver file's
+      nameservers are the machine's own as they stand.
+
+    Loopbacks never reach the chain (the chain builder refuses
+    them too): on this machine a loopback "own server" is the
+    filter itself or the resolved stub it replaced. Reads are
+    cached on the record/resolver files' mtime+size — the
+    provider is consulted per query, and a fresh engage is
+    picked up without a daemon restart. Best effort throughout:
+    an unreadable state yields an empty floor, never a dead
+    daemon — the chain then stands on the configured upstreams
+    alone.
+    """
+
+    def __init__(self, state_dir: Path, view=None):
+        self._state_dir = Path(state_dir)
+        self._view = view if view is not None else RealSystemView()
+        self._cache_key: Optional[Tuple] = None
+        self._cache: List[str] = []
+
+    def _key(self) -> Tuple:
+        parts = []
+        for path in (
+            self._state_dir / "dns-backup.json",
+            Path("/etc/resolv.conf"),
+        ):
+            try:
+                st = path.stat()
+                parts.append((st.st_mtime_ns, st.st_size))
+            except OSError:
+                parts.append(None)
+        return tuple(parts)
+
+    def __call__(self) -> List[str]:
+        key = self._key()
+        if key == self._cache_key:
+            return list(self._cache)
+        servers = self._read()
+        self._cache_key = key
+        self._cache = servers
+        return list(servers)
+
+    def _read(self) -> List[str]:
+        try:
+            guard = DnsGuard(self._view, self._state_dir)
+            record = guard.load_backup()
+        except Exception:
+            record = None
+        if record is not None:
+            if record.stack == "direct":
+                original = record.original_resolv_conf()
+                found = (
+                    nameservers_in(original) if original is not None else []
+                )
+            else:
+                found = list(record.prior_servers)
+        else:
+            try:
+                found = nameservers_in(self._view.resolv_conf_bytes())
+            except Exception:
+                found = []
+        # Loopbacks are dropped here as well as in the chain
+        # builder: neither reader trusts the other's input.
+        return [s for s in found if not is_loopback(s)]
+
+
 def _resumption_note() -> Optional[str]:
     """At daemon start: if Sphinx was on (the guard's recorded
     intent) but the machine's DNS no longer points at the filter —
@@ -242,8 +321,14 @@ def run() -> int:
         )
         return 2
 
+    system_resolvers = SystemResolvers(paths.state_dir())
+
     def forward(data: bytes):
-        return forward_query(data, resolvers=config.upstreams)
+        return forward_query(
+            data,
+            resolvers=config.upstreams,
+            system_resolvers=system_resolvers(),
+        )
 
     engine = FilterEngine(
         lists_provider=live.get,
@@ -276,6 +361,7 @@ def run() -> int:
             "uptime_s": int(time.monotonic() - started),
             "queries_logged": len(engine.query_log),
             "upstreams": list(config.upstreams),
+            "floor": system_resolvers(),
         }
 
     control = ControlServer(
@@ -290,10 +376,12 @@ def run() -> int:
         control = None
 
     where = ", ".join(f"{host}:{port}" for host, port in bound)
+    floor = system_resolvers()
     _say(
         f"Sphinx {__version__} is listening on {where} with "
         f"{initial.lists.blocklist.size:,} domains loaded. Upstream: "
         f"{', '.join(config.upstreams)}."
+        + (f" Floor: {', '.join(floor)}." if floor else "")
     )
     note = _resumption_note()
     if note is not None:

@@ -439,3 +439,38 @@ def test_unrecognized_machines_are_refused_plainly(tmp_path):
     result = guard.engage(FakeProofer())
     assert not result.ok
     assert view.calls == []
+
+
+# --- a mixed loopback record is corrupt too (bug hunt 2026-10-23) ---------
+
+
+def test_a_mixed_loopback_direct_record_is_corrupt(tmp_path):
+    # The all-loopback check alone used to pass this record: the
+    # stub's address beside a real server. Restoring it would put
+    # the poisoned file back byte-for-byte, so it is refused like
+    # the pure shape — kept on disk, blocking, never applied.
+    original = b"nameserver 127.0.0.53\nnameserver 192.168.1.1\n"
+    poisoned = BackupRecord(
+        stack="direct",
+        engaged_loopbacks=["127.0.0.1"],
+        resolv_conf_b64=base64.b64encode(original).decode(),
+        resolv_conf_sha256=hashlib.sha256(original).hexdigest(),
+    )
+    (tmp_path / "dns-backup.json").write_text(json.dumps(poisoned.to_dict()))
+    guard = _guard(FakeView(resolv=ORIGINAL), tmp_path)
+    assert guard.load_backup() is None
+    assert guard.backup_problem() is not None
+    assert guard.backup_file.exists()
+
+
+def test_a_mixed_loopback_resolved_record_is_corrupt(tmp_path):
+    poisoned = BackupRecord(
+        stack="resolved",
+        engaged_loopbacks=["127.0.0.1"],
+        link="eth0",
+        prior_servers=["127.0.0.1", "192.168.1.1"],
+    )
+    (tmp_path / "dns-backup.json").write_text(json.dumps(poisoned.to_dict()))
+    guard = _guard(stub_resolved_view(), tmp_path)
+    assert guard.load_backup() is None
+    assert guard.backup_problem() is not None
