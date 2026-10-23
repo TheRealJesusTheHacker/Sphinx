@@ -1,0 +1,32 @@
+# Sphinx WireGuard server - rendered by install.sh from
+# templates/wg0.conf.tmpl. The double-underscore placeholders below
+# are all replaced at render time; a rendered file must contain no
+# unreplaced placeholder text. They stand for: the server's private
+# key (wg genkey output), the server's tunnel address with prefix,
+# the UDP listen port, the tunnel subnet (e.g. 10.8.0.0/24), and the
+# egress interface (the one holding the default route). (The private
+# key's placeholder is described, not spelled out, so the key itself
+# is never substituted into a comment - it belongs on the
+# PrivateKey line and nowhere else.)
+#
+# Client peers are appended below the [Interface] section by
+# add-client.sh, each under a "# Sphinx client: <name>" marker, and
+# removed again by remove-client.sh. Editing those blocks by hand is
+# fine; the scripts match on the marker or on the peer's public key.
+
+[Interface]
+PrivateKey = __SERVER_PRIVATE_KEY__
+Address = __SERVER_ADDRESS__
+ListenPort = __LISTEN_PORT__
+# This package manages this file itself (add-client.sh appends peers
+# and applies them live, one peer at a time). SaveConfig stays false
+# so wg-quick never rewrites the file underneath the scripts.
+SaveConfig = false
+# Forwarding + NAT for the tunnel subnet, the wg-quick way: the rules
+# are added when the interface comes up and removed when it goes down,
+# so nothing is left behind by a stopped tunnel. These lines only ADD
+# forwarding and masquerade for tunnel traffic - they block nothing.
+# Client traffic is never filtered here; a VPN endpoint's job is to
+# carry traffic, not to decide which of it the client may have.
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -s __TUNNEL_SUBNET__ -o __EGRESS_IF__ -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -s __TUNNEL_SUBNET__ -o __EGRESS_IF__ -j MASQUERADE
