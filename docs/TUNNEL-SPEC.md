@@ -57,6 +57,16 @@ reaffirms FILTER-SPEC program-wide:
   in a way that makes an app look offline. A refusal is a
   refusal, delivered at once — never a timeout by another
   name.
+- **Sphinx must never be the reason an unlisted name
+  fails.** If the device's own DNS would have answered a
+  name, Sphinx's presence must not turn that answer into a
+  failure: blocking decisions apply to listed names only,
+  and the unlisted path degrades toward the network's own
+  resolution — through every fallback the forwarder
+  discipline honestly has — never toward silence. (Stated
+  by the owner 2026-10-23 after a real-device defect in the
+  Android forwarder did exactly this; the TUNNEL DNS path
+  inherits the fixed forwarder, not the defective one.)
 - In **VPN** modes the tunnel carries all covered traffic to
   the chosen server by design (that is the location change).
   The only blocking that exists anywhere in tunnel modes is
