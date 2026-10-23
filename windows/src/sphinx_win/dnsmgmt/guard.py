@@ -24,6 +24,7 @@ must never be left with broken DNS):
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import time
 from dataclasses import dataclass, field
@@ -36,7 +37,17 @@ from ..core.store import write_atomically
 from .base import FAMILY_V4, FAMILY_V6, AdapterDns, DnsManager, NotElevatedError
 
 BACKUP_FILE_NAME = "dns-backup.json"
+FLOOR_FILE_NAME = "dns-floor.json"
 LOOPBACK_FOR_FAMILY = {FAMILY_V4: LOOPBACK_V4, FAMILY_V6: LOOPBACK_V6}
+
+
+def _is_loopback_server(address: str) -> bool:
+    """True for any loopback address (all of 127.0.0.0/8, ::1) —
+    and for anything that is not an IP literal at all."""
+    try:
+        return ipaddress.ip_address(address).is_loopback
+    except ValueError:
+        return True
 
 
 class DnsState(Enum):
@@ -64,6 +75,8 @@ class DnsGuard:
     def __init__(self, manager: DnsManager, data_dir: Path):
         self._manager = manager
         self.backup_file = Path(data_dir) / BACKUP_FILE_NAME
+        self.floor_file = Path(data_dir) / FLOOR_FILE_NAME
+        self._floor_cache: Optional[Tuple[int, int, List[str]]] = None
 
     # --- Backup file ------------------------------------------------
 
@@ -77,10 +90,11 @@ class DnsGuard:
             return None
         # Per-entry validation, not all-or-nothing: one torn or
         # hand-edited entry must not void the rest of the record —
-        # and some entries are refused outright. A pure-loopback
-        # "original" can never be legitimate (engage refuses to
-        # record one), so a backup claiming one is corrupt; applying
-        # it would point DNS at a loopback nothing listens on.
+        # and some entries are refused outright. A loopback in a
+        # recorded "original" can never be legitimate (engage
+        # refuses to record one), so a backup claiming one is
+        # corrupt; applying it would point DNS at a loopback
+        # nothing honest listens on.
         valid: List[AdapterDns] = []
         for entry in entries:
             try:
@@ -91,7 +105,17 @@ class DnsGuard:
                 continue
             if not adapter.interface_alias:
                 continue
-            if adapter.servers == [LOOPBACK_FOR_FAMILY[adapter.family]]:
+            if any(_is_loopback_server(s) for s in adapter.servers):
+                # ANY loopback in a recorded "original" refuses the
+                # entry — not only the pure single-loopback shape.
+                # Engage refuses to record any adapter already at a
+                # loopback, mixed lists included, so a record that
+                # contains one (127.0.0.53 among real servers, a
+                # loopback from the other family, anything in
+                # 127.0.0.0/8) is corrupt or hand-edited; applying
+                # it would aim DNS at a loopback nothing honest
+                # listens on. (Bug hunt 2026-10-23: the pure-shape
+                # check alone let mixed records through.)
                 continue
             valid.append(adapter)
         return valid or None
@@ -122,6 +146,63 @@ class DnsGuard:
             self.backup_file.unlink(missing_ok=True)
         except OSError:
             pass
+
+    # --- The forwarding floor -------------------------------------
+    # The machine's own DNS servers, captured at engage time
+    # (FILTER-SPEC's forwarding chain): the forwarder degrades
+    # toward them when the public upstreams cannot be reached on
+    # the current network. The floor is advisory, never a restore
+    # value: a failed capture or write never blocks an engage,
+    # and restores never read it. It is written only beside a
+    # fresh backup (never over an existing engagement's), and it
+    # is retired with the backup at a verified disengage or a
+    # dismissal.
+
+    def _save_floor(self, servers: List[str]) -> None:
+        try:
+            write_atomically(
+                self.floor_file,
+                json.dumps(
+                    {"version": 1, "servers": list(servers)},
+                    indent=1,
+                ).encode("utf-8"),
+            )
+        except OSError:
+            pass  # advisory only (see above); engage proceeds
+        self._floor_cache = None
+
+    def load_floor(self) -> List[str]:
+        """The captured floor, or [] when none is recorded.
+        Cached on the file's mtime+size: the controller asks on
+        every forwarded query. Loopback and non-address entries
+        are dropped here as well as in the chain builder (the
+        file is hand-editable; neither reader trusts it)."""
+        try:
+            stat = self.floor_file.stat()
+            key = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            self._floor_cache = None
+            return []
+        if self._floor_cache is not None and self._floor_cache[:2] == key:
+            return list(self._floor_cache[2])
+        try:
+            raw = json.loads(self.floor_file.read_text(encoding="utf-8"))
+            servers = [
+                str(s)
+                for s in raw["servers"]
+                if isinstance(s, str) and not _is_loopback_server(s)
+            ]
+        except (OSError, ValueError, KeyError, TypeError):
+            servers = []
+        self._floor_cache = (key[0], key[1], servers)
+        return list(servers)
+
+    def _delete_floor(self) -> None:
+        try:
+            self.floor_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+        self._floor_cache = None
 
     # --- State detection ----------------------------------------------
 
@@ -238,6 +319,19 @@ class DnsGuard:
                     "verifiably, so it changed nothing.",
                     [],
                 )
+            # The forwarding floor, captured NOW — before any
+            # change, while the effective servers are still the
+            # machine's own. After the change they read as the
+            # filter's loopbacks, which is precisely the value that
+            # must never be captured. A manager that cannot report
+            # effective servers (or a read that fails) leaves an
+            # empty floor: engage proceeds on the public chain
+            # alone rather than not at all.
+            try:
+                floor = self._manager.effective_dns_servers()
+            except Exception:
+                floor = []
+            self._save_floor(floor)
 
         changed: List[AdapterDns] = []
         already: List[AdapterDns] = []
@@ -278,6 +372,7 @@ class DnsGuard:
                 # changed, so there is nothing to restore — and fail
                 # plainly rather than claim an engagement that isn't.
                 self._delete_backup()
+                self._delete_floor()
                 return EngageResult(
                     False,
                     "The filter is not answering on a loopback this "
@@ -355,6 +450,7 @@ class DnsGuard:
                 failed,
             )
         self._delete_backup()
+        self._delete_floor()
         return RestoreResult(True, "Your previous DNS settings are restored.", [])
 
     def dismiss_leftover(self) -> bool:
@@ -364,4 +460,5 @@ class DnsGuard:
         if self.load_backup() is None:
             return False
         self._delete_backup()
+        self._delete_floor()
         return True

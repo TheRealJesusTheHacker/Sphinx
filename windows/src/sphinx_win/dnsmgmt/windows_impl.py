@@ -52,6 +52,30 @@ def parse_nameserver_value(raw: Optional[str]) -> List[str]:
     return [part for part in re.split(r"[,\s]+", raw.strip()) if part]
 
 
+def parse_effective_servers(rows) -> List[str]:
+    """Interpret Get-DnsClientServerAddress output rows: the
+    EFFECTIVE DNS servers (DHCP-learned ones included), flattened
+    in row order, duplicates removed. This is the one place the
+    cmdlet's effective view is wanted — the forwarding chain's
+    floor (see base.py); configured reads never come from here."""
+    seen: List[str] = []
+    if rows is None:
+        return seen
+    if isinstance(rows, dict):
+        rows = [rows]
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        addresses = row.get("ServerAddresses")
+        if isinstance(addresses, str):
+            addresses = [addresses]
+        for address in addresses or []:
+            address = str(address)
+            if address and address not in seen:
+                seen.append(address)
+    return seen
+
+
 def is_windows() -> bool:
     return sys.platform.startswith("win")
 
@@ -188,3 +212,39 @@ $result | ConvertTo-Json -Compress
                 f"-AddressFamily {ps_family} -ServerAddresses @({server_list})"
             )
         _run_powershell(script + "\n'ok' | ConvertTo-Json -Compress")
+
+    def effective_dns_servers(self) -> List[str]:
+        """The machine's EFFECTIVE DNS servers, via the cmdlet
+        whose output configured reads deliberately avoid (see the
+        module docstring): Get-DnsClientServerAddress reports the
+        addresses actually in use, DHCP-learned ones included —
+        exactly the forwarding floor. Read over the same active
+        adapters active_adapters() enumerates (up, carrying a
+        default route); loopback and disconnected adapters are
+        never consulted."""
+        script = r"""
+$aliases = @()
+foreach ($family in @('IPv4','IPv6')) {
+  $dest = if ($family -eq 'IPv4') { '0.0.0.0/0' } else { '::/0' }
+  $routes = Get-NetRoute -AddressFamily $family -DestinationPrefix $dest -ErrorAction SilentlyContinue
+  foreach ($r in $routes) { $aliases += $r.InterfaceAlias }
+}
+$aliases = $aliases | Select-Object -Unique
+$result = @()
+foreach ($alias in $aliases) {
+  $adapter = Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue
+  if ($null -eq $adapter -or $adapter.Status -ne 'Up') { continue }
+  foreach ($family in @('IPv4','IPv6')) {
+    $entry = Get-DnsClientServerAddress -InterfaceAlias $alias -AddressFamily $family -ErrorAction SilentlyContinue
+    if ($null -ne $entry) {
+      $result += [PSCustomObject]@{
+        InterfaceAlias = $alias
+        Family = $family
+        ServerAddresses = $entry.ServerAddresses
+      }
+    }
+  }
+}
+$result | ConvertTo-Json -Compress
+"""
+        return parse_effective_servers(_run_powershell(script))

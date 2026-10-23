@@ -268,3 +268,115 @@ class TestPartialFamilyEngage:
         assert not result.ok
         assert guard.load_backup() is None
         assert manager.get_dns("Wi-Fi", "IPv4") == ["192.168.1.1"]
+
+
+class TestMixedLoopbackBackup:
+    """Bug hunt 2026-10-23: load_backup used to refuse only the
+    pure single-loopback "original" ([127.0.0.1] exactly). A record
+    whose servers MIX a loopback with real addresses — 127.0.0.53
+    beside the router, ::1 on an IPv4 row, any 127.0.0.0/8 address —
+    passed validation and would be restored verbatim, aiming DNS
+    at a loopback nothing honest listens on. Engage refuses to
+    record ANY adapter already at a loopback, so such a record is
+    corrupt by the same construction and every entry carrying one
+    is now dropped."""
+
+    def _write_backup(self, guard, adapters):
+        import json
+
+        payload = {
+            "version": 1,
+            "saved_at_ms": 1,
+            "adapters": [
+                {"interface_alias": a, "family": f, "servers": s}
+                for a, f, s in adapters
+            ],
+        }
+        guard.backup_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_stub_loopback_mixed_with_a_real_server_is_dropped(self, tmp_path):
+        guard, manager = make_guard(tmp_path)
+        self._write_backup(
+            guard, [("Wi-Fi", "IPv4", ["127.0.0.53", "192.168.1.1"])]
+        )
+        assert guard.load_backup() is None
+
+    def test_family_loopback_mixed_with_a_real_server_is_dropped(self, tmp_path):
+        guard, manager = make_guard(tmp_path)
+        self._write_backup(
+            guard, [("Wi-Fi", "IPv4", ["127.0.0.1", "8.8.8.8"])]
+        )
+        assert guard.load_backup() is None
+
+    def test_other_loopback_shapes_are_dropped(self, tmp_path):
+        guard, manager = make_guard(tmp_path)
+        self._write_backup(
+            guard,
+            [
+                ("Wi-Fi", "IPv4", ["::1"]),  # the other family's loopback
+                ("Wi-Fi", "IPv6", ["127.0.0.2"]),  # anywhere in 127.0.0.0/8
+                ("Ethernet", "IPv4", ["192.168.1.1"]),  # the honest row
+            ],
+        )
+        backup = guard.load_backup()
+        assert [(a.interface_alias, a.family) for a in backup] == [
+            ("Ethernet", "IPv4")
+        ]
+
+
+class TestFloorCapture:
+    """The forwarding chain's floor (FILTER-SPEC): the machine's
+    effective DNS servers, captured at engage time — before the
+    change, while they are still the machine's own — and retired
+    with the backup. The floor is never a restore value."""
+
+    def test_engage_captures_the_effective_servers_as_floor(self, tmp_path):
+        guard, manager = make_guard(tmp_path)
+        assert guard.load_floor() == []
+        assert guard.engage().ok
+        # Wi-Fi's static + link-local, in adapter order; the DHCP
+        # rows contribute nothing the fake knows.
+        assert guard.load_floor() == ["192.168.1.1", "fe80::1"]
+        assert guard.floor_file.exists()
+
+    def test_disengage_retires_the_floor(self, tmp_path):
+        guard, manager = make_guard(tmp_path)
+        assert guard.engage().ok
+        assert guard.disengage().ok
+        assert guard.load_floor() == []
+        assert not guard.floor_file.exists()
+
+    def test_dismiss_retires_the_floor(self, tmp_path):
+        guard, manager = make_guard(tmp_path)
+        assert guard.engage().ok
+        # The user puts DNS back by hand: a leftover with a floor.
+        for adapter in HOME:
+            manager.set_dns(
+                adapter.interface_alias, adapter.family, list(adapter.servers)
+            )
+        assert guard.detect_state() is DnsState.LEFTOVER
+        assert guard.dismiss_leftover()
+        assert guard.load_floor() == []
+        assert not guard.floor_file.exists()
+
+    def test_reengage_never_recaptures_over_an_existing_floor(self, tmp_path):
+        guard, manager = make_guard(tmp_path)
+        assert guard.engage().ok
+        floor_before = guard.load_floor()
+        # A re-engage against the existing record (the resume path):
+        # the effective servers now read as loopbacks, and the
+        # captured floor must survive untouched.
+        assert guard.engage().ok
+        assert guard.load_floor() == floor_before
+
+    def test_a_hand_edited_floor_file_sheds_its_loopbacks(self, tmp_path):
+        import json
+
+        guard, manager = make_guard(tmp_path)
+        guard.floor_file.write_text(
+            json.dumps(
+                {"version": 1, "servers": ["127.0.0.1", "192.168.1.1", "junk"]}
+            ),
+            encoding="utf-8",
+        )
+        assert guard.load_floor() == ["192.168.1.1"]

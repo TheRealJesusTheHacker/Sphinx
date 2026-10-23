@@ -87,3 +87,17 @@ class DnsManager(Protocol):
         """Set static DNS servers for the adapter/family. An empty
         list resets the adapter to DHCP-provided DNS."""
         ...
+
+    def effective_dns_servers(self) -> List[str]:
+        """The DNS servers the machine is *effectively* using right
+        now, across the active adapters, in the order the adapters
+        report them — DHCP-learned addresses included. This is the
+        forwarding chain's floor (FILTER-SPEC): the resolvers that
+        were answering this machine before Sphinx engaged. It is
+        captured before any change, never read from an engaged
+        machine (whose effective servers are the filter's own
+        loopbacks), and it is never a restore value — restores use
+        the configured servers recorded in the backup, exactly.
+        Loopbacks may appear here (another local resolver); the
+        chain builder refuses them as floor entries."""
+        ...

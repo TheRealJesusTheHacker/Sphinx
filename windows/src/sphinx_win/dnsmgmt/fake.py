@@ -31,6 +31,18 @@ class FakeDnsManager:
     def get_dns(self, interface_alias: str, family: str) -> List[str]:
         return list(self._state.get((interface_alias, family), []))
 
+    def effective_dns_servers(self) -> List[str]:
+        """The fake's effective servers: its current per-adapter
+        lists, flattened in adapter order, duplicates removed. (A
+        real DHCP adapter's effective servers are its learned ones;
+        the fake's state *is* its effective state.)"""
+        seen: List[str] = []
+        for alias, family in self._order:
+            for server in self._state[(alias, family)]:
+                if server not in seen:
+                    seen.append(server)
+        return seen
+
     def set_dns(self, interface_alias: str, family: str, servers: List[str]) -> None:
         if (interface_alias, family) in self.fail_on_set:
             raise RuntimeError(f"injected failure on {interface_alias}/{family}")

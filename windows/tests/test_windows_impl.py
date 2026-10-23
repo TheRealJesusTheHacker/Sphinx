@@ -75,3 +75,47 @@ class TestReadMapping:
             ("Wi-Fi", "IPv4", ["192.168.1.1"]),
             ("Wi-Fi", "IPv6", []),  # automatic reads as empty, per contract
         ]
+
+
+class TestParseEffectiveServers:
+    """The floor's read: Get-DnsClientServerAddress rows flattened
+    in order, duplicates removed, string-or-list shapes both."""
+
+    def test_flattens_in_order_without_duplicates(self):
+        rows = [
+            {"InterfaceAlias": "Wi-Fi", "Family": "IPv4",
+             "ServerAddresses": ["192.168.1.1", "1.1.1.1"]},
+            {"InterfaceAlias": "Wi-Fi", "Family": "IPv6",
+             "ServerAddresses": ["fe80::1"]},
+            {"InterfaceAlias": "Ethernet", "Family": "IPv4",
+             "ServerAddresses": "192.168.1.1"},
+        ]
+        assert impl.parse_effective_servers(rows) == [
+            "192.168.1.1", "1.1.1.1", "fe80::1",
+        ]
+
+    def test_single_row_and_empty_shapes(self):
+        assert impl.parse_effective_servers(None) == []
+        assert impl.parse_effective_servers([]) == []
+        assert impl.parse_effective_servers(
+            {"ServerAddresses": ["8.8.8.8"]}
+        ) == ["8.8.8.8"]
+        assert impl.parse_effective_servers(
+            [{"ServerAddresses": None}, {"ServerAddresses": []}, "junk"]
+        ) == []
+
+    def test_effective_read_uses_the_cmdlet_not_the_registry(self):
+        # The mirror of the configured-read tests: effective
+        # servers are the ONE thing the cmdlet is asked for.
+        source = inspect.getsource(WindowsDnsManager.effective_dns_servers)
+        assert "Get-DnsClientServerAddress" in source
+        assert "ServerAddresses" in source
+
+    def test_effective_servers_maps_through_the_parser(self, monkeypatch):
+        monkeypatch.setattr(
+            impl,
+            "_run_powershell",
+            lambda script: [{"ServerAddresses": ["192.168.1.1"]}],
+        )
+        manager = WindowsDnsManager()
+        assert manager.effective_dns_servers() == ["192.168.1.1"]

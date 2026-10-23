@@ -29,6 +29,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+from ..core.forwarder import forward_query
 from ..core.querylog import QueryLog
 from ..core.server import DnsFilterServer, FilterEngine
 from ..core.store import Store
@@ -58,7 +59,9 @@ class SphinxController:
         self._lists_lock = threading.Lock()
         self._lists = store.load_effective_lists()
         self.engine = FilterEngine(
-            self._current_lists, query_log=QueryLog()
+            self._current_lists,
+            forwarder=self._forward,
+            query_log=QueryLog(),
         )
         self.engine.log_enabled = store.query_log_enabled()
         self.server: Optional[DnsFilterServer] = None
@@ -69,6 +72,16 @@ class SphinxController:
     def _current_lists(self):
         with self._lists_lock:
             return self._lists
+
+    def _forward(self, data: bytes):
+        """Forward one allowed query along the spec's chain: the
+        public resolvers, then the machine's own DNS as the floor —
+        the servers captured at engage time and held by the guard
+        (empty when Sphinx is not engaged, when the floor degrades
+        to the publics alone). Read per query through the guard's
+        cache, so a floor captured by a later engage is picked up
+        without rebuilding the engine."""
+        return forward_query(data, system_resolvers=self.guard.load_floor())
 
     def reload_lists(self):
         """Re-read every list input from the store and swap the

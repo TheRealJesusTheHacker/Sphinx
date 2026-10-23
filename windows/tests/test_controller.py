@@ -182,3 +182,33 @@ class TestLogToggle:
         # "Off" and "clear" are separate controls (FILTER-SPEC).
         assert len(controller.engine.query_log) == 1
         assert not controller.engine.log_enabled
+
+
+class TestForwardingFloor:
+    """The controller wires the guard's captured floor into every
+    forwarded query (FILTER-SPEC's chain): before engage there is
+    no floor; after engage the floor is the machine's own DNS."""
+
+    def test_engine_forwarding_carries_the_captured_floor(self, tmp_path):
+        import sphinx_win.app.controller as controller_module
+
+        controller, manager, holder = make_controller(tmp_path)
+        seen = {}
+
+        def fake_forward(data, system_resolvers=()):
+            seen["floor"] = list(system_resolvers)
+            return b"answer"
+
+        monkeypatch = pytest.MonkeyPatch.context().__enter__()
+        monkeypatch.setattr(controller_module, "forward_query", fake_forward)
+        try:
+            controller._forward(b"query")
+            assert seen["floor"] == []  # not engaged: no floor yet
+            controller.start()
+            controller._forward(b"query")
+            assert seen["floor"] == ["192.168.1.1"]
+            controller.stop()
+            controller._forward(b"query")
+            assert seen["floor"] == []  # retired with the restore
+        finally:
+            monkeypatch.undo()
