@@ -64,6 +64,12 @@ from PySide6.QtWidgets import (
 from ..core.profiles import is_valid_profile_name
 from ..core.updater import ListUpdater
 from ..core.validation import ListSource, is_acceptable_url
+from ..core.vpngate import (
+    PUBLIC_SECTION_NOTE,
+    PUBLIC_SECTION_TITLE,
+    VPNGATE_DISCLOSURE,
+    VpnGateDirectory,
+)
 from ..dnsmgmt.guard import DnsState
 from . import theme
 from .autostart import AutostartManager
@@ -107,10 +113,19 @@ def sphinx_icon(state: str = "off") -> QIcon:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, controller: SphinxController, elevated: bool):
+    def __init__(self, controller: SphinxController, elevated: bool,
+                 public_fetcher=None):
         super().__init__()
         self.controller = controller
         self._elevated = elevated
+        # The VPN Gate directory model (Phase 2): fetch-at-use-
+        # time, cache-with-age, nothing bundled. The fetcher is
+        # injectable so tests drive it with a synthetic feed and
+        # never touch the live one; production fetches HTTPS.
+        self.public_directory = VpnGateDirectory(
+            Path(controller.tunnel_store.data_dir), fetcher=public_fetcher
+        )
+        self._public_listing = None
         self._host: Optional["TrayHost"] = None
         self.setWindowTitle("Sphinx — Sentinel Safeguard")
         self.setWindowIcon(sphinx_icon())
@@ -338,6 +353,43 @@ class MainWindow(QMainWindow):
             self.vpn_disconnect_button.setEnabled(False)
             self.vpn_reconnect_button.setEnabled(False)
         layout.addWidget(vpn_box)
+
+        # --- Public volunteer servers (VPN Gate — Phase 2) -------
+        # A DISTINCT section from the user's own profiles above:
+        # separate box, separate words, never pre-enabled — the
+        # list is fetched only when the user opens it on purpose,
+        # and the disclosure rides here at the point of use (and
+        # again in the connect confirmation).
+        public_box = QGroupBox(PUBLIC_SECTION_TITLE)
+        public_layout = QVBoxLayout(public_box)
+        public_note = QLabel(PUBLIC_SECTION_NOTE)
+        public_note.setWordWrap(True)
+        public_layout.addWidget(public_note)
+        self.public_disclosure_label = QLabel(VPNGATE_DISCLOSURE)
+        self.public_disclosure_label.setWordWrap(True)
+        public_layout.addWidget(self.public_disclosure_label)
+        self.public_status_label = QLabel(
+            "The list is not fetched until you ask. Nothing here "
+            "is bundled, loaded ahead of time, or turned on for "
+            "you."
+        )
+        self.public_status_label.setWordWrap(True)
+        public_layout.addWidget(self.public_status_label)
+        self.public_fetch_button = QPushButton(
+            "Show public volunteer servers"
+        )
+        self.public_fetch_button.clicked.connect(self._on_public_fetch)
+        public_layout.addWidget(self.public_fetch_button)
+        self.public_servers_list = QListWidget()
+        self.public_servers_list.setMaximumHeight(140)
+        public_layout.addWidget(self.public_servers_list)
+        self.public_connect_button = QPushButton(
+            "Connect to the selected public server"
+        )
+        self.public_connect_button.clicked.connect(self._on_public_connect)
+        public_layout.addWidget(self.public_connect_button)
+        layout.addWidget(public_box)
+
         self._refresh_vpn_profiles()
         self._refresh_vpn_mode_note()
 
@@ -624,9 +676,12 @@ class MainWindow(QMainWindow):
             )
         if profile is not None and profile.protocol == "openvpn":
             statements.append(
-                "This is an OpenVPN profile: Sphinx stores and "
-                "labels it, and connecting it arrives in Phase 2 — "
-                "connecting now will say exactly that."
+                "This is an OpenVPN profile: it connects through "
+                "the OpenVPN program installed on this machine — "
+                "if OpenVPN isn't installed, connecting says so "
+                "and names what to install. Sphinx removes unsafe "
+                "lines from its config before connecting and says "
+                "what it removed."
             )
         self.vpn_mode_note.setText(" ".join(statements))
 
@@ -747,6 +802,121 @@ class MainWindow(QMainWindow):
             self.vpn_status_label.setText(str(e))
             return
         self.vpn_status_label.setText(message)
+
+    # --- Public volunteer servers (VPN Gate directory) -------------
+
+    def fetch_public_servers(self):
+        """Open the directory on purpose: fetch the list NOW
+        (at use time), show rows with their freshness stated —
+        a labeled cache age, or the honest empty state when the
+        feed is dead and no cache exists. Returns the listing."""
+        listing = self.public_directory.refresh()
+        self._public_listing = listing
+        self.public_servers_list.clear()
+        for server in listing.servers:
+            self.public_servers_list.addItem(server.label)
+        self.public_status_label.setText(listing.freshness_text())
+        return listing
+
+    def _on_public_fetch(self):
+        self.fetch_public_servers()
+
+    @staticmethod
+    def public_connect_confirmation_text(label: str) -> str:
+        """The connect confirmation for a public server — the
+        disclosure rides AGAIN here, at the moment of use, not
+        only back in the section the user may have scrolled past."""
+        return (
+            f"Connect to {label}?\n\n"
+            + VPNGATE_DISCLOSURE
+            + "\n\nDisconnecting returns you to the mode you had "
+            "before the VPN (Blocker only, or Off)."
+        )
+
+    def selected_public_server(self):
+        """The directory row the user picked, or None."""
+        if self._public_listing is None:
+            return None
+        item = self.public_servers_list.currentItem()
+        if item is None:
+            return None
+        for server in self._public_listing.servers:
+            if server.label == item.text():
+                return server
+        return None
+
+    def connect_selected_public_server(self, *, confirmed: bool) -> bool:
+        """Connect the picked public row. ``confirmed`` is the
+        user's answer to the confirmation that carries the
+        disclosure (the dialog handler asks; the behavior here
+        refuses to run unconfirmed). The row becomes an ordinary
+        OpenVPN profile under its public label, and connecting
+        runs the ordinary mode model — sanitizer included."""
+        server = self.selected_public_server()
+        if server is None:
+            self.public_status_label.setText(
+                "Pick a public server from the list first — open "
+                "the list with “Show public volunteer servers”."
+            )
+            return False
+        if not confirmed:
+            self.public_status_label.setText(
+                "Not connected: a public server connects only "
+                "after its confirmation, which states whose "
+                "machine it is."
+            )
+            return False
+        if not self._elevated:
+            self.public_status_label.setText(
+                "Connecting a VPN needs administrator rights. Use "
+                "\u201cRestart Sphinx as administrator\u201d and approve "
+                "the standard Windows prompt — if you decline it, "
+                "the VPN stays off and Sphinx will not ask in a loop."
+            )
+            return False
+        label = server.label
+        try:
+            # A row re-fetched today replaces any older copy of
+            # the same labeled row: the feed churns, and the
+            # config that connects is the one just shown.
+            if label in self.controller.tunnel_store.profile_names():
+                self.controller.tunnel_store.delete_profile(label)
+            self.controller.tunnel_store.import_text(
+                server.config_text, name=label
+            )
+            message = self.controller.connect_vpn(
+                label,
+                with_blocker=self.vpn_blocker_checkbox.isChecked(),
+            )
+        except Exception as e:
+            self.public_status_label.setText(
+                getattr(e, "message", None) or str(e)
+            )
+            return False
+        self._refresh_vpn_profiles(select=label)
+        self.public_status_label.setText(message)
+        self.vpn_status_label.setText(message)
+        return True
+
+    def _on_public_connect(self):
+        server = self.selected_public_server()
+        if server is None:
+            self.public_status_label.setText(
+                "Pick a public server from the list first — open "
+                "the list with “Show public volunteer servers”."
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Public volunteer server",
+            self.public_connect_confirmation_text(server.label),
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.public_status_label.setText(
+                "Not connected — the choice stays yours."
+            )
+            return
+        self.connect_selected_public_server(confirmed=True)
 
     def _refresh_vpn_status(self) -> None:
         if self.controller.vpn_active() or self.controller.tunnel_leftover():
