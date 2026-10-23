@@ -34,6 +34,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -269,6 +270,77 @@ class MainWindow(QMainWindow):
         layout.addWidget(profiles_box)
         self._refresh_profiles_ui()
 
+        # --- VPN mode (TUNNEL-SPEC, Phase 1: WireGuard) -----------
+        vpn_box = QGroupBox("VPN — your server, your choice")
+        vpn_layout = QVBoxLayout(vpn_box)
+        vpn_disclosure = QLabel(
+            "In VPN mode, your traffic passes through the server "
+            "you choose — that's how a VPN works. Sphinx ships no "
+            "servers of its own in your list; a profile is a server "
+            "you added or one your provider gave you. Choosing a "
+            "server is trusting its operator with your traffic; a "
+            "VPN changes the address the world sees, it does not "
+            "make you anonymous."
+        )
+        vpn_disclosure.setWordWrap(True)
+        vpn_layout.addWidget(vpn_disclosure)
+        self.vpn_status_label = QLabel("")
+        self.vpn_status_label.setWordWrap(True)
+        vpn_layout.addWidget(self.vpn_status_label)
+        vpn_pick = QHBoxLayout()
+        self.vpn_combo = QComboBox()
+        self.vpn_combo.currentIndexChanged.connect(self._refresh_vpn_mode_note)
+        vpn_pick.addWidget(self.vpn_combo)
+        self.vpn_connect_button = QPushButton("Connect")
+        self.vpn_connect_button.clicked.connect(self._on_vpn_connect)
+        vpn_pick.addWidget(self.vpn_connect_button)
+        self.vpn_disconnect_button = QPushButton("Disconnect")
+        self.vpn_disconnect_button.clicked.connect(self._on_vpn_disconnect)
+        vpn_pick.addWidget(self.vpn_disconnect_button)
+        self.vpn_reconnect_button = QPushButton("Reconnect")
+        self.vpn_reconnect_button.clicked.connect(self._on_vpn_reconnect)
+        vpn_pick.addWidget(self.vpn_reconnect_button)
+        vpn_layout.addLayout(vpn_pick)
+        vpn_add = QHBoxLayout()
+        self.vpn_import_file_button = QPushButton("Add server from file…")
+        self.vpn_import_file_button.clicked.connect(self._on_vpn_import_file)
+        vpn_add.addWidget(self.vpn_import_file_button)
+        self.vpn_import_text_button = QPushButton("Paste a server config…")
+        self.vpn_import_text_button.clicked.connect(self._on_vpn_import_text)
+        vpn_add.addWidget(self.vpn_import_text_button)
+        self.vpn_delete_button = QPushButton("Remove server")
+        self.vpn_delete_button.clicked.connect(self._on_vpn_delete)
+        vpn_add.addWidget(self.vpn_delete_button)
+        vpn_layout.addLayout(vpn_add)
+        self.vpn_blocker_checkbox = QCheckBox(
+            "Also block ads while the VPN is on (VPN + Blocker)"
+        )
+        self.vpn_blocker_checkbox.setChecked(True)
+        self.vpn_blocker_checkbox.toggled.connect(self._refresh_vpn_mode_note)
+        vpn_layout.addWidget(self.vpn_blocker_checkbox)
+        self.vpn_mode_note = QLabel("")
+        self.vpn_mode_note.setWordWrap(True)
+        vpn_layout.addWidget(self.vpn_mode_note)
+        vpn_admin_note = QLabel(
+            "Connecting or disconnecting a VPN changes this "
+            "machine's routes and needs administrator rights: "
+            "Windows asks once with its standard prompt when Sphinx "
+            "is restarted as administrator. If you decline that "
+            "prompt, the VPN stays off and Sphinx does not keep "
+            "asking — there is no silent retry loop. Disconnecting "
+            "returns you to the mode you had before the VPN "
+            "(Blocker only, or Off)."
+        )
+        vpn_admin_note.setWordWrap(True)
+        vpn_layout.addWidget(vpn_admin_note)
+        if not elevated:
+            self.vpn_connect_button.setEnabled(False)
+            self.vpn_disconnect_button.setEnabled(False)
+            self.vpn_reconnect_button.setEnabled(False)
+        layout.addWidget(vpn_box)
+        self._refresh_vpn_profiles()
+        self._refresh_vpn_mode_note()
+
         log_box = QGroupBox("Recent lookups (on this device only, in memory)")
         log_layout = QVBoxLayout(log_box)
         self.log_list = QListWidget()
@@ -492,6 +564,197 @@ class MainWindow(QMainWindow):
 
     # --- Filter toggle --------------------------------------------------
 
+    # --- VPN mode ---------------------------------------------------
+
+    def _refresh_vpn_profiles(self, select: Optional[str] = None) -> None:
+        """The picker holds exactly the user's saved servers —
+        it starts EMPTY (TUNNEL-SPEC: no bundled servers, no
+        samples, ever) and gains an entry only when the user
+        adds one."""
+        try:
+            names = self.controller.tunnel_store.profile_names()
+        except Exception as e:
+            names = []
+            self.vpn_status_label.setText(str(e))
+        current = select or self.vpn_combo.currentText()
+        self.vpn_combo.blockSignals(True)
+        self.vpn_combo.clear()
+        self.vpn_combo.addItems(names)
+        if current in names:
+            self.vpn_combo.setCurrentText(current)
+        self.vpn_combo.blockSignals(False)
+        if not names:
+            self.vpn_status_label.setText(
+                "No servers yet. Add one from a config file or "
+                "paste a config your provider gave you — Sphinx "
+                "ships no servers of its own."
+            )
+        self._refresh_vpn_mode_note()
+
+    def selected_vpn_profile(self):
+        name = self.vpn_combo.currentText()
+        if not name:
+            return None
+        try:
+            return self.controller.tunnel_store.get_profile(name)
+        except Exception:
+            return None
+
+    def _refresh_vpn_mode_note(self) -> None:
+        """Mode statements where the mode is offered — the
+        spec's disclosure discipline, at the control itself."""
+        profile = self.selected_vpn_profile()
+        statements = []
+        if profile is not None and getattr(profile, "scope", None) == "some":
+            statements.append(
+                "This server covers some traffic (a split tunnel): "
+                "only the destinations in its config go through "
+                "the VPN; the rest uses your ordinary connection."
+            )
+        if not self.vpn_blocker_checkbox.isChecked():
+            statements.append(
+                "VPN only: DNS is unfiltered in this mode — ads "
+                "are not blocked while it is on."
+            )
+        else:
+            statements.append(
+                "VPN + Blocker: DNS lookups are questioned by the "
+                "filter first, then answered by the server's DNS "
+                "through the tunnel."
+            )
+        if profile is not None and profile.protocol == "openvpn":
+            statements.append(
+                "This is an OpenVPN profile: Sphinx stores and "
+                "labels it, and connecting it arrives in Phase 2 — "
+                "connecting now will say exactly that."
+            )
+        self.vpn_mode_note.setText(" ".join(statements))
+
+    def import_vpn_text(self, text: str, filename: Optional[str] = None) -> bool:
+        """Add a server from config text. Testable without any
+        dialog; the dialogs below are thin shells over it. A
+        refusal (bad key, endpoint with no port, bad CIDR, a
+        missing server key) is shown with its reason named and
+        stores nothing."""
+        try:
+            profile = self.controller.tunnel_store.import_text(
+                text, filename=filename
+            )
+        except Exception as e:
+            message = getattr(e, "message", None) or str(e)
+            if getattr(e, "reason", None) == "name-required":
+                name, ok = QInputDialog.getText(
+                    self, "Name this server", "Give this server a name:"
+                )
+                if ok and name.strip():
+                    try:
+                        profile = self.controller.tunnel_store.import_text(
+                            text, name=name.strip()
+                        )
+                    except Exception as e2:
+                        self.vpn_status_label.setText(
+                            getattr(e2, "message", None) or str(e2)
+                        )
+                        return False
+                else:
+                    self.vpn_status_label.setText(message)
+                    return False
+            else:
+                self.vpn_status_label.setText(message)
+                return False
+        self._refresh_vpn_profiles(select=profile.name)
+        self.vpn_status_label.setText(
+            f"Saved {profile.name!r}. It has not been connected."
+        )
+        return True
+
+    def _on_vpn_import_file(self):
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Add a server config", "",
+            "Config files (*.conf *.ovpn *.txt);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            self.vpn_status_label.setText(f"That file could not be read ({e}).")
+            return
+        self.import_vpn_text(text, filename=Path(path).name)
+
+    def _on_vpn_import_text(self):
+        text, ok = QInputDialog.getMultiLineText(
+            self, "Paste a server config",
+            "Paste a WireGuard (.conf) or OpenVPN (.ovpn) config:",
+        )
+        if ok and text.strip():
+            self.import_vpn_text(text)
+
+    def _on_vpn_delete(self):
+        name = self.vpn_combo.currentText()
+        if not name:
+            return
+        if self.controller.vpn_active() and (
+            self.controller.vpn_status().profile_name == name
+        ):
+            self.vpn_status_label.setText(
+                "Disconnect the VPN before removing the server it "
+                "is using."
+            )
+            return
+        self.controller.tunnel_store.delete_profile(name)
+        self._refresh_vpn_profiles()
+
+    def _on_vpn_connect(self):
+        name = self.vpn_combo.currentText()
+        if not name:
+            self.vpn_status_label.setText(
+                "Add a server first — the list starts empty, on "
+                "purpose: Sphinx ships no servers of its own."
+            )
+            return
+        if not self._elevated:
+            self.vpn_status_label.setText(
+                "Connecting a VPN needs administrator rights. Use "
+                "\u201cRestart Sphinx as administrator\u201d and approve "
+                "the standard Windows prompt — if you decline it, "
+                "the VPN stays off and Sphinx will not ask in a loop."
+            )
+            return
+        try:
+            message = self.controller.connect_vpn(
+                name, with_blocker=self.vpn_blocker_checkbox.isChecked()
+            )
+        except Exception as e:
+            self.vpn_status_label.setText(str(e))
+            return
+        self.vpn_status_label.setText(message)
+
+    def _on_vpn_disconnect(self):
+        try:
+            message = self.controller.disconnect_vpn()
+        except Exception as e:
+            self.vpn_status_label.setText(str(e))
+            return
+        self.vpn_status_label.setText(message)
+
+    def _on_vpn_reconnect(self):
+        try:
+            message = self.controller.reconnect_vpn()
+        except Exception as e:
+            self.vpn_status_label.setText(str(e))
+            return
+        self.vpn_status_label.setText(message)
+
+    def _refresh_vpn_status(self) -> None:
+        if self.controller.vpn_active() or self.controller.tunnel_leftover():
+            try:
+                self.vpn_status_label.setText(self.controller.vpn_status().message)
+            except Exception:
+                pass
+
     def _on_toggle(self):
         try:
             if self.controller.running:
@@ -713,6 +976,7 @@ class MainWindow(QMainWindow):
         self.leftover_box.setVisible(
             state is DnsState.LEFTOVER and not self.controller.running
         )
+        self._refresh_vpn_status()
         if self._host is not None:
             # The tray icon's third state: the machine needs the
             # user — a leftover or an unrecorded loopback to decide
@@ -721,8 +985,20 @@ class MainWindow(QMainWindow):
             attention = state in (DnsState.LEFTOVER, DnsState.UNKNOWN) or (
                 self.controller.running and state is not DnsState.ENGAGED
             )
+            vpn_attention = False
+            vpn_text = None
+            try:
+                vpn_status = self.controller.vpn_status()
+                if vpn_status.active or vpn_status.leftover:
+                    vpn_text = vpn_status.message
+                    vpn_attention = vpn_status.blocked or vpn_status.leftover
+            except Exception:
+                pass
             self._host.update(
-                self.status_label.text(), self.controller.running, attention
+                self.status_label.text(),
+                self.controller.running,
+                attention or vpn_attention,
+                vpn_text=vpn_text,
             )
 
         if self.controller.store.query_log_enabled():
@@ -791,6 +1067,18 @@ class MainWindow(QMainWindow):
         # No tray to go to (a desktop without one, or a bare test):
         # the window is the app again, with Phase 1's discipline —
         # stop cleanly, and refuse rather than strand the machine.
+        if self.controller.vpn_active():
+            try:
+                self.controller.disconnect_vpn()
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Sphinx's VPN is still on",
+                    "Sphinx couldn't take its VPN down and restore "
+                    f"what it changed, so it stays on.\n\n{e}",
+                )
+                event.ignore()
+                return
         if self.controller.running:
             try:
                 self.controller.stop()
@@ -850,6 +1138,7 @@ class TrayHost:
 
         self.tray_icon: Optional[QSystemTrayIcon] = None
         self._status_action: Optional[QAction] = None
+        self._vpn_action: Optional[QAction] = None
         self._toggle_action: Optional[QAction] = None
         self._elevate_action: Optional[QAction] = None
         if QSystemTrayIcon.isSystemTrayAvailable():
@@ -866,6 +1155,14 @@ class TrayHost:
             self._toggle_action = QAction("Turn Sphinx on", menu)
             self._toggle_action.triggered.connect(self.window._on_toggle)
             menu.addAction(self._toggle_action)
+            self._vpn_action = QAction("VPN is off.", menu)
+            self._vpn_action.setEnabled(False)
+            menu.addAction(self._vpn_action)
+            vpn_disconnect_action = QAction("Disconnect VPN", menu)
+            vpn_disconnect_action.triggered.connect(
+                self.window._on_vpn_disconnect
+            )
+            menu.addAction(vpn_disconnect_action)
             self._elevate_action = QAction("Restart as administrator", menu)
             self._elevate_action.triggered.connect(
                 lambda: self.request_elevation()
@@ -902,13 +1199,19 @@ class TrayHost:
             self._show_window()
 
     def update(
-        self, status_text: str, running: bool, attention: bool = False
+        self,
+        status_text: str,
+        running: bool,
+        attention: bool = False,
+        vpn_text: Optional[str] = None,
     ) -> None:
         """The window's refresh pushes its (real, read) status here,
         so the tray never claims a state the window hasn't read —
         the icon's state color comes from the same read."""
         if self._status_action is not None:
             self._status_action.setText(status_text)
+        if getattr(self, "_vpn_action", None) is not None and vpn_text:
+            self._vpn_action.setText(vpn_text)
         if self._toggle_action is not None:
             self._toggle_action.setText(
                 "Turn Sphinx off" if running else "Turn Sphinx on"
@@ -981,6 +1284,24 @@ class TrayHost:
         must not exit silently through this one unguarded path:
         quitting abandons the engagement, so the user is warned
         and must confirm it explicitly (Sweep #3, W-2)."""
+        # A live VPN comes down first, through its ordinary stop
+        # path (tunnel down, then its DNS restore, then back to
+        # the pre-VPN mode): quitting must never strand a tunnel.
+        # A failed disconnect refuses the quit the same way a
+        # failed DNS restore does.
+        if self.controller.vpn_active():
+            try:
+                self.controller.disconnect_vpn()
+            except Exception as e:
+                self._show_window()
+                QMessageBox.warning(
+                    self.window,
+                    "Sphinx's VPN is still on",
+                    "Sphinx couldn't take its VPN down and restore "
+                    f"what it changed, so it stays on rather than "
+                    f"strand the machine.\n\n{e}",
+                )
+                return False
         if self.controller.running:
             try:
                 self.controller.stop()
@@ -1068,4 +1389,13 @@ class TrayHost:
             StartupAction.SURFACE_UNKNOWN,
         ):
             return StartupOutcome(attention=True, summary=plan.reason)
+        # A tunnel leftover is surfaced the same way a DNS one is:
+        # the record waits for the user's own reconnect/disconnect
+        # decision — never silently taken over, never dropped.
+        try:
+            if self.controller.tunnel_leftover():
+                status = self.controller.vpn_status()
+                return StartupOutcome(attention=True, summary=status.message)
+        except Exception:
+            pass  # unreadable tunnel state never traps the startup
         return StartupOutcome(summary="")
