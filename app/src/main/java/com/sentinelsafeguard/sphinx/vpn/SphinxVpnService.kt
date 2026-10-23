@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
@@ -15,14 +16,20 @@ import android.os.SystemClock
 import com.sentinelsafeguard.sphinx.MainActivity
 import com.sentinelsafeguard.sphinx.R
 import com.sentinelsafeguard.sphinx.core.AppRules
+import com.sentinelsafeguard.sphinx.core.Blocklist
 import com.sentinelsafeguard.sphinx.core.CaptureMode
 import com.sentinelsafeguard.sphinx.core.DnsPacket
 import com.sentinelsafeguard.sphinx.core.DnsForwarder
+import com.sentinelsafeguard.sphinx.core.DnsProbe
 import com.sentinelsafeguard.sphinx.core.DropCounts
 import com.sentinelsafeguard.sphinx.core.FilterLists
+import com.sentinelsafeguard.sphinx.core.Ip6UdpPacket
 import com.sentinelsafeguard.sphinx.core.IpFlow
+import com.sentinelsafeguard.sphinx.core.IpTcpPacket
 import com.sentinelsafeguard.sphinx.core.IpUdpPacket
 import com.sentinelsafeguard.sphinx.core.QueryLog
+import com.sentinelsafeguard.sphinx.core.SystemDnsFilter
+import com.sentinelsafeguard.sphinx.core.UpstreamHealth
 import com.sentinelsafeguard.sphinx.lists.ListStore
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -34,6 +41,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -79,6 +87,14 @@ class SphinxVpnService : VpnService() {
         const val ACTION_STOP = "com.sentinelsafeguard.sphinx.action.STOP"
         const val ACTION_RELOAD_LISTS = "com.sentinelsafeguard.sphinx.action.RELOAD_LISTS"
 
+        /** Run one diagnostics probe (fix2 hunt): classify the
+         *  name in [EXTRA_PROBE_NAME] and, when it is not blocked,
+         *  ask the real upstream chain about it. The verdict lands
+         *  in [probeVerdicts] under [EXTRA_PROBE_REQUEST]. */
+        const val ACTION_PROBE = "com.sentinelsafeguard.sphinx.action.PROBE"
+        const val EXTRA_PROBE_NAME = "com.sentinelsafeguard.sphinx.extra.PROBE_NAME"
+        const val EXTRA_PROBE_REQUEST = "com.sentinelsafeguard.sphinx.extra.PROBE_REQUEST"
+
         /** Tear the interface down and rebuild it with the rule
          *  state now on disk — app rules for the new interface, and
          *  the lists (allowlist, custom entries) reloaded into
@@ -116,6 +132,42 @@ class SphinxVpnService : VpnService() {
          *  newest first). Memory-only; shared with the UI so the user
          *  can see and clear what Sphinx questioned. */
         val queryLog = QueryLog()
+
+        /** Packets the bounded worker queue refused under a burst
+         *  (fix2 hunt, F7). Memory-only; shown in diagnostics so a
+         *  drop is a reported fact, never a silent one. */
+        val queueDropCount = AtomicLong(0)
+
+        /** The lists currently in force, mirrored here on every
+         *  (re)load so the diagnostics screen and its probes judge
+         *  names by exactly what the running filter judges by. */
+        @Volatile
+        var activeLists: FilterLists? = null
+
+        /** One diagnostics probe's verdict, in plain words. */
+        data class ProbeVerdict(
+            val requestId: Int,
+            val name: String,
+            val blockedByList: Boolean,
+            val lines: List<String>,
+            val finishedAtMillis: Long,
+        )
+
+        /** Probe verdicts by request id. Memory-only, like
+         *  everything else Sphinx records. */
+        val probeVerdicts = ConcurrentHashMap<Int, ProbeVerdict>()
+
+        @Volatile
+        var latestProbeId: Int = 0
+            private set
+
+        private val probeRequestCounter = AtomicInteger(0)
+
+        fun nextProbeRequestId(): Int = probeRequestCounter.incrementAndGet()
+
+        internal fun noteProbeFinished(requestId: Int) {
+            latestProbeId = requestId
+        }
     }
 
     private var tunInterface: ParcelFileDescriptor? = null
@@ -140,9 +192,16 @@ class SphinxVpnService : VpnService() {
      * counters count packets the workers actually processed, so under
      * an extreme flood the drop counts understate the total stopped —
      * bounded memory wins over exact bookkeeping in a flood.
+     *
+     * Fix2 hunt (F3/F7): eight workers, not four — one worker can be
+     * occupied for a whole chain walk (up to six attempts at three
+     * seconds each), so four starved under an ordinary app burst
+     * during exactly the failure storms this service exists to
+     * survive. Queue refusals are counted (queueDropCount) and
+     * surfaced in diagnostics instead of vanishing.
      */
     private fun newWorkerPool(): ExecutorService = ThreadPoolExecutor(
-        4, 4, 0L, TimeUnit.MILLISECONDS,
+        8, 8, 0L, TimeUnit.MILLISECONDS,
         LinkedBlockingQueue(WORK_QUEUE_CAP),
         ThreadPoolExecutor.AbortPolicy(),
     )
@@ -179,6 +238,13 @@ class SphinxVpnService : VpnService() {
     @Volatile
     private var systemDnsCapturedAtMs: Long = 0L
 
+    // Which network each captured DNS server came from, so the
+    // forwarding socket for that server can be bound back to its
+    // own network (fix2 hunt, F2). A scoped or carrier-synthesized
+    // address only exists on the network that reported it.
+    @Volatile
+    private var capturedNetworks: Map<InetAddress, Network> = emptyMap()
+
     override fun onCreate() {
         super.onCreate()
         store = ListStore(this)
@@ -209,6 +275,17 @@ class SphinxVpnService : VpnService() {
             ACTION_STOP -> {
                 shutdown()
                 stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_PROBE -> {
+                // A diagnostics probe: run it off this thread (a
+                // full chain walk can take seconds) and never let
+                // it start or stop the filter by itself.
+                val name = intent.getStringExtra(EXTRA_PROBE_NAME)
+                val requestId = intent.getIntExtra(EXTRA_PROBE_REQUEST, 0)
+                if (name != null && requestId > 0) {
+                    Thread({ runProbe(requestId, name) }, "sphinx-diagnostics-probe").start()
+                }
                 return START_NOT_STICKY
             }
             ACTION_RELOAD_LISTS -> {
@@ -281,7 +358,9 @@ class SphinxVpnService : VpnService() {
     }
 
     private fun reloadListsNow() {
-        filterLists = store.loadEffectiveLists()
+        val loaded = store.loadEffectiveLists()
+        filterLists = loaded
+        activeLists = loaded
         logEnabled = store.queryLogEnabled()
     }
 
@@ -361,6 +440,16 @@ class SphinxVpnService : VpnService() {
                     .addAddress(VIRTUAL_DNS, 32)
                     .addRoute(VIRTUAL_DNS, 32)
                     .addDnsServer(VIRTUAL_DNS)
+                    // Fix2 hunt (F1): the IPv6 twin. The base
+                    // interface offered no IPv6 DNS server and the
+                    // packet path parsed IPv4 only, so DNS that
+                    // arrived over IPv6 transport — the first
+                    // family on the owner's carrier class — met a
+                    // parser that returned null and silence. Same
+                    // shape, both families, from here on.
+                    .addAddress(VIRTUAL_DNS_V6, 128)
+                    .addRoute(VIRTUAL_DNS_V6, 128)
+                    .addDnsServer(VIRTUAL_DNS_V6)
                 for (pkg in rules.excludedPackages) {
                     try {
                         builder.addDisallowedApplication(pkg)
@@ -429,7 +518,13 @@ class SphinxVpnService : VpnService() {
                 // Pool shut down mid-stop, or the bounded queue is
                 // full under a flood: drop the packet (see
                 // newWorkerPool); the loop condition ends the thread
-                // on the next pass when shutting down.
+                // on the next pass when shutting down. A refusal
+                // under a burst is counted for diagnostics — the
+                // filter must never drop silently while claiming
+                // to run (fix2 hunt, F7).
+                if (e is java.util.concurrent.RejectedExecutionException && running) {
+                    queueDropCount.incrementAndGet()
+                }
             }
         }
     }
@@ -503,26 +598,67 @@ class SphinxVpnService : VpnService() {
     /**
      * The DNS servers of every non-VPN network that offers
      * internet — the phone's own resolvers, in the platform's
-     * order. Read from the live networks at capture time; whatever
-     * was gathered stands if the platform refuses partway, and an
-     * empty result simply leaves the upstream chain at its public
-     * head.
+     * order — each remembered together with the network it came
+     * from, so a forwarding socket can later be bound back to
+     * that network (see [forward]). Read from the live networks
+     * at capture time; whatever was gathered stands if the
+     * platform refuses partway, and an empty result simply leaves
+     * the upstream chain at its public head.
+     *
+     * Fix2 hunt (F2): the capture is validated through
+     * [SystemDnsFilter] before it may pose as the chain's floor —
+     * the base capture trusted it blindly, and on DNS64/NAT64 or
+     * link-local-heavy carriers it can name addresses no socket
+     * can use, or Sphinx itself. What survives is published to
+     * [UpstreamHealth] for diagnostics, with the floor's absence
+     * kept as a first-class state: when nothing usable is
+     * captured, the diagnostics screen says plainly that the
+     * safety net is missing, instead of the filter pretending
+     * the chain has a floor it doesn't.
      */
     private fun captureSystemDns(): List<InetAddress> {
         val manager = getSystemService(ConnectivityManager::class.java)
             ?: return emptyList()
-        val servers = LinkedHashSet<InetAddress>()
+        val byAddress = LinkedHashMap<InetAddress, Network>()
         try {
             for (network in manager.allNetworks) {
                 val caps = manager.getNetworkCapabilities(network) ?: continue
                 if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
                 if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
-                manager.getLinkProperties(network)?.dnsServers?.let { servers.addAll(it) }
+                manager.getLinkProperties(network)?.dnsServers?.forEach { server ->
+                    if (server !in byAddress) byAddress[server] = network
+                }
             }
         } catch (e: Exception) {
             // Whatever was gathered stands.
         }
-        return servers.toList()
+        val usable = SystemDnsFilter.usable(byAddress.keys.toList())
+        capturedNetworks = byAddress.filterKeys { it in usable }
+        UpstreamHealth.floorMissing = usable.isEmpty()
+        UpstreamHealth.chainInUse = publishChain(usable)
+        return usable
+    }
+
+    /** The chain as diagnostics shows it: the public head with
+     *  its origin, then the captured floor with its scopes. */
+    private fun publishChain(floor: List<InetAddress>): List<UpstreamHealth.ChainEntry> {
+        val entries = ArrayList<UpstreamHealth.ChainEntry>()
+        for (resolver in DnsForwarder.UPSTREAM_RESOLVERS) {
+            entries.add(
+                UpstreamHealth.ChainEntry(
+                    resolver, fromPhone = false, scopeNote = "public resolver",
+                ),
+            )
+        }
+        for (resolver in floor) {
+            entries.add(
+                UpstreamHealth.ChainEntry(
+                    resolver, fromPhone = true,
+                    scopeNote = SystemDnsFilter.scopeNote(resolver),
+                ),
+            )
+        }
+        return entries
     }
 
     /** The captured snapshot, refreshed when it is empty or older
@@ -546,6 +682,26 @@ class SphinxVpnService : VpnService() {
         // Nothing in here may throw: one malformed packet gets dropped,
         // never takes a worker — or the filter — down with it.
         try {
+            // TCP first (fix2 hunt, F4): a DNS-over-TCP attempt at
+            // the virtual DNS address gets the reset a host with no
+            // listener sends — an immediate, honest refusal the
+            // asker can retry from (UDP, or its next resolver) —
+            // instead of the base behavior, silence inside the TUN
+            // and a full connect timeout stamped onto one query.
+            // This is a mitigation, stated as one: the filter has
+            // no TCP DNS service, and this does not give it one.
+            val tcp = IpTcpPacket.parse(packet, packet.size)
+            if (tcp != null && tcp.destPort == DNS_PORT &&
+                tcp.destAddress.contentEquals(VIRTUAL_DNS_BYTES)
+            ) {
+                writeResponse(output, IpTcpPacket.buildReset(tcp))
+                return
+            }
+            val version = if (packet.isEmpty()) 0 else (packet[0].toInt() and 0xFF) shr 4
+            if (version == 6) {
+                handlePacketV6(packet, output)
+                return
+            }
             val ip = IpUdpPacket.parse(packet, packet.size) ?: return
             if (ip.destPort != DNS_PORT) return
             if (!ip.destAddress.contentEquals(VIRTUAL_DNS_BYTES)) return
@@ -554,28 +710,57 @@ class SphinxVpnService : VpnService() {
             val dns = DnsPacket.parse(queryBytes, queryBytes.size) ?: return
             if (dns.isResponse) return
 
-            val lists = filterLists ?: return
-            val blocked = lists.isBlocked(dns.questionName)
-            if (logEnabled) {
-                queryLog.record(dns.questionName, blocked, System.currentTimeMillis())
-            }
-            if (blocked) {
-                blockedCount.incrementAndGet()
-                writeResponse(output, IpUdpPacket.buildResponse(ip, dns.buildSinkholeResponse()))
-            } else {
-                // Count at the decision, per FILTER-SPEC.md ("allowed
-                // (forwarded)") — an upstream failure must not make a
-                // let-through query vanish from both counters.
-                allowedCount.incrementAndGet()
-                val answer = forward(queryBytes)
-                if (answer != null) {
-                    writeResponse(output, IpUdpPacket.buildResponse(ip, answer))
-                }
-                // No answer from any upstream: leave the query unanswered
-                // and let the asking app retry, per FILTER-SPEC.md.
+            answerQuery(dns, queryBytes) { answer ->
+                writeResponse(output, IpUdpPacket.buildResponse(ip, answer))
             }
         } catch (e: Exception) {
             // Dropped. Hostile input ends here, quietly.
+        }
+    }
+
+    /** The IPv6 twin of [handlePacket]'s UDP path (fix2 hunt,
+     *  F1): the same questioning, sinkhole, and forwarding — only
+     *  the envelope differs. Before fix2 this path did not exist
+     *  and IPv6 DNS met a parser that returned null. */
+    private fun handlePacketV6(packet: ByteArray, output: FileOutputStream) {
+        val ip = Ip6UdpPacket.parse(packet, packet.size) ?: return
+        if (ip.destPort != DNS_PORT) return
+        if (!ip.destAddress.contentEquals(VIRTUAL_DNS_V6_BYTES)) return
+        val queryBytes = packet.copyOfRange(ip.payloadOffset, ip.payloadOffset + ip.payloadLength)
+        val dns = DnsPacket.parse(queryBytes, queryBytes.size) ?: return
+        if (dns.isResponse) return
+        answerQuery(dns, queryBytes) { answer ->
+            writeResponse(output, Ip6UdpPacket.buildResponse(ip, answer))
+        }
+    }
+
+    /** The one decision every transport shares: question the
+     *  name, sinkhole it or forward it, and hand the answer
+     *  bytes (when there are any) to the caller's envelope. */
+    private fun answerQuery(
+        dns: DnsPacket,
+        queryBytes: ByteArray,
+        respond: (ByteArray) -> Unit,
+    ) {
+        val lists = filterLists ?: return
+        val blocked = lists.isBlocked(dns.questionName)
+        if (logEnabled) {
+            queryLog.record(dns.questionName, blocked, System.currentTimeMillis())
+        }
+        if (blocked) {
+            blockedCount.incrementAndGet()
+            respond(dns.buildSinkholeResponse())
+        } else {
+            // Count at the decision, per FILTER-SPEC.md ("allowed
+            // (forwarded)") — an upstream failure must not make a
+            // let-through query vanish from both counters.
+            allowedCount.incrementAndGet()
+            val answer = forward(queryBytes)
+            if (answer != null) {
+                respond(answer)
+            }
+            // No answer from any upstream: leave the query unanswered
+            // and let the asking app retry, per FILTER-SPEC.md.
         }
     }
 
@@ -593,6 +778,14 @@ class SphinxVpnService : VpnService() {
      * query: matching ID, QR (response) bit set — the same
      * discipline every stub resolver applies (FILTER-SPEC.md,
      * forwarding rules), enforced in the forwarder.
+     *
+     * Fix2 hunt (F2): each socket is also bound to the network
+     * its resolver was captured from, when it was captured from
+     * one — a scoped or carrier-synthesized address only exists
+     * on its own network, and the forwarder treats a refused
+     * bind exactly like a refused protect(): that socket is not
+     * used. Every attempt's outcome lands in [UpstreamHealth],
+     * which is what the diagnostics screen renders.
      */
     private fun forward(query: ByteArray): ByteArray? =
         DnsForwarder.forwardQuery(
@@ -602,7 +795,98 @@ class SphinxVpnService : VpnService() {
             port = DNS_PORT,
             protectUdp = { protect(it) },
             protectTcp = { protect(it) },
+            bindUdp = { socket, resolver ->
+                val network = capturedNetworks[resolver]
+                if (network == null) {
+                    true // a public resolver: no home network to pin to
+                } else {
+                    try {
+                        network.bindSocket(socket)
+                        true
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
+            },
+            onOutcome = { resolver, outcome, rttMillis ->
+                UpstreamHealth.record(
+                    resolver, outcome, System.currentTimeMillis(), rttMillis,
+                )
+            },
         )
+
+    /**
+     * One diagnostics probe (fix2 hunt): classify [rawName]
+     * against the lists in force and — when it is not blocked —
+     * ask the real upstream chain a real A and AAAA question for
+     * it, over the same bound, protected sockets the filter
+     * itself forwards on. The verdict is plain language and
+     * outcomes only (no traffic content beyond what the probe
+     * itself asked); it lands in [probeVerdicts] for the
+     * diagnostics screen. Runs on its own thread: a full chain
+     * walk can take seconds.
+     */
+    private fun runProbe(requestId: Int, rawName: String) {
+        val name = Blocklist.normalize(rawName)
+        val lines = ArrayList<String>()
+        var blocked = false
+        when {
+            name == null ->
+                lines.add("That doesn't look like a domain name — check the spelling and try again.")
+            else -> {
+                val lists = filterLists
+                if (lists == null) {
+                    lines.add("Sphinx's lists aren't loaded, so nothing can be checked right now.")
+                } else if (lists.isBlocked(name)) {
+                    blocked = true
+                    lines.add(
+                        "Blocked by the list. Sphinx answers this name itself " +
+                            "(0.0.0.0 for IPv4, :: for IPv6) and it never leaves the phone.",
+                    )
+                } else {
+                    lines.add("Not on the block list — Sphinx would forward this name. Asking the upstreams now…")
+                    val probes = listOf(
+                        "IPv4 (A)" to DnsPacket.TYPE_A,
+                        "IPv6 (AAAA)" to DnsPacket.TYPE_AAAA,
+                    )
+                    for ((label, type) in probes) {
+                        val query = DnsProbe.buildQuery(name, type, (requestId * 31 + type) and 0xFFFF)
+                        val answer = if (query == null) null else forward(query)
+                        if (answer == null) {
+                            lines.add(
+                                "$label: no upstream answered — every resolver in the chain " +
+                                    "failed or timed out (see the chain above).",
+                            )
+                        } else {
+                            val summary = DnsProbe.summarizeAnswer(answer, answer.size)
+                            lines.add(
+                                when {
+                                    summary == null ->
+                                        "$label: an upstream answered, but the answer couldn't be read."
+                                    summary.firstAddress != null ->
+                                        "$label: resolved to ${summary.firstAddress} " +
+                                            "(${summary.rcodeName}, ${summary.answerCount} answer(s))."
+                                    summary.answerCount == 0 ->
+                                        "$label: the name resolved, but it has no " +
+                                            "${if (type == DnsPacket.TYPE_A) "IPv4" else "IPv6"} address " +
+                                            "(${summary.rcodeName}, no answers) — normal for a name " +
+                                            "that only uses the other family."
+                                    else ->
+                                        "$label: resolved (${summary.rcodeName}, " +
+                                            "${summary.answerCount} answer(s), no direct address — " +
+                                            "likely a chain of aliases (CNAME))."
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        probeVerdicts[requestId] = ProbeVerdict(
+            requestId, rawName, blocked, lines, System.currentTimeMillis(),
+        )
+        noteProbeFinished(requestId)
+    }
 
     private fun writeResponse(output: FileOutputStream, packet: ByteArray) {
         synchronized(writeLock) {
@@ -677,6 +961,11 @@ class SphinxVpnService : VpnService() {
 }
 
 private val VIRTUAL_DNS_BYTES = byteArrayOf(10, 10, 10, 10)
+
+private val VIRTUAL_DNS_V6_BYTES = byteArrayOf(
+    0xFD.toByte(), 0x00, 0x00, 0x10, 0x00, 0x10, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+)
 
 private fun ByteArray.toHex(): String =
     joinToString("") { "%02x".format(it.toInt() and 0xFF) }
