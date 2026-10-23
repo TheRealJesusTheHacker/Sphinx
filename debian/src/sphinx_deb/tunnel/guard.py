@@ -50,6 +50,7 @@ from ..core.tunnel import (
     parse_endpoint,
     with_endpoint_host,
 )
+from ..core.openvpn_sanitize import render_session_config
 from ..core.tunnelstore import TunnelStore, write_secret_atomically
 
 INTERFACE_NAME = "sphinx0"
@@ -59,11 +60,32 @@ MISSING_TOOLS_MESSAGE = (
     "Sphinx cannot open a tunnel. Install them with: "
     "sudo apt install wireguard-tools — nothing was changed."
 )
+# Kept for import compatibility with Phase 1 callers/tests.
 OPENVPN_PHASE1_MESSAGE = (
     "This profile is an OpenVPN profile. Sphinx stores and labels "
     "OpenVPN profiles today, but connecting with one arrives in "
     "Phase 2 — in Phase 1 only WireGuard profiles connect. "
     "Nothing was changed."
+)
+MISSING_OPENVPN_MESSAGE = (
+    "OpenVPN is not installed on this machine, so Sphinx cannot "
+    "open this tunnel. Install it with: sudo apt install openvpn "
+    "— it is a Recommends of this package, not a hard dependency, "
+    "because WireGuard must work without it. Nothing was changed."
+)
+OPENVPN_INTERFACE = "sphinxovpn"
+OPENVPN_DNS_BEHAVIOR = "pull-filter-reject-pushed-dns"
+KILLSWITCH_OPENVPN_LEVEL = (
+    "OpenVPN kill-switch level: if the openvpn process exits "
+    "unexpectedly, Sphinx does NOT silently re-point DNS — DNS "
+    "stays exactly where it was before the tunnel (pushed DNS was "
+    "rejected, so it never moved), and status announces the "
+    "blocked/leftover state with reconnect / intentional-disconnect "
+    "choices. Unlike WireGuard, Sphinx cannot blackhole general "
+    "traffic after an unexpected openvpn exit, because openvpn "
+    "removes its own routes as it dies — general traffic is NOT "
+    "held. That is a lower level than the WireGuard kill switch, "
+    "stated plainly."
 )
 
 
@@ -95,10 +117,20 @@ class TunnelStatus:
     handshake_age_s: Optional[int] = None
     handshake_fresh: bool = False
     intent_on: bool = False
+    protocol: str = ""
+    dns_behavior: str = ""
+    removed_directives: List[str] = field(default_factory=list)
+    openvpn_pid: Optional[int] = None
+    kill_switch: str = ""
 
     @property
     def connected(self) -> bool:
-        """Connected is a proof, not a hope (TUNNEL-SPEC)."""
+        """Connected is a proof, not a hope (TUNNEL-SPEC). For
+        OpenVPN the proof is: process alive AND its tun interface
+        present (ENGAGED already requires both); there is no
+        WireGuard-style handshake to be fresh."""
+        if self.protocol == "openvpn":
+            return self.state == TunnelState.ENGAGED
         return self.state == TunnelState.ENGAGED and self.handshake_fresh
 
 
@@ -165,6 +197,60 @@ class RealTunnelRunner:
     def interface_exists(self, interface: str) -> bool:
         rc, _, _ = self.run(["ip", "link", "show", interface])
         return rc == 0
+
+    # --- OpenVPN process management (Phase 2) -------------------
+    _ovpn_procs: dict = {}
+
+    def openvpn_start(self, argv, log_path=None):
+        """Spawn openvpn as a child (never daemonized by config —
+        the daemon directive is sanitized out; Sphinx owns the
+        process). Returns (pid, error)."""
+        try:
+            log = open(log_path, "ab") if log_path else subprocess.DEVNULL
+            proc = subprocess.Popen(argv, stdout=log, stderr=log)
+        except OSError as exc:
+            return None, str(exc)
+        self._ovpn_procs[proc.pid] = proc
+        return proc.pid, ""
+
+    def openvpn_alive(self, pid) -> bool:
+        if not pid:
+            return False
+        proc = self._ovpn_procs.get(int(pid))
+        if proc is not None:
+            return proc.poll() is None
+        try:
+            os.kill(int(pid), 0)
+            return True
+        except OSError:
+            return False
+
+    def openvpn_stop(self, pid) -> bool:
+        """SIGTERM, wait, SIGKILL. True only when the process is
+        verified gone — prerm relies on this honesty."""
+        import signal as _signal
+        if not pid:
+            return True
+        pid = int(pid)
+        if not self.openvpn_alive(pid):
+            return True
+        try:
+            os.kill(pid, _signal.SIGTERM)
+        except OSError:
+            return not self.openvpn_alive(pid)
+        for _ in range(50):
+            if not self.openvpn_alive(pid):
+                return True
+            time.sleep(0.2)
+        try:
+            os.kill(pid, _signal.SIGKILL)
+        except OSError:
+            pass
+        for _ in range(25):
+            if not self.openvpn_alive(pid):
+                return True
+            time.sleep(0.2)
+        return not self.openvpn_alive(pid)
 
     def probe_dns(self, server: str) -> bool:
         """A real DNS exchange with ``server`` (the profile's DNS,
@@ -233,10 +319,24 @@ class TunnelGuard:
     def _config_path(self) -> Path:
         return self._runtime_dir / "tunnel" / f"{self.interface}.conf"
 
+    def _ovpn_config_path(self) -> Path:
+        return self._runtime_dir / "tunnel" / "sphinx-openvpn.conf"
+
+    def _ovpn_log_path(self) -> Path:
+        return self._runtime_dir / "tunnel" / "sphinx-openvpn.log"
+
     # --- status -------------------------------------------------------
 
     def detect_state(self) -> TunnelState:
         record = self._store.load_session()
+        if record is not None and record.get("protocol") == "openvpn":
+            pid = record.get("openvpn_pid")
+            alive_fn = getattr(self._runner, "openvpn_alive", None)
+            alive = bool(alive_fn(pid)) if alive_fn else False
+            iface = self._runner.interface_exists(OPENVPN_INTERFACE)
+            if record.get("state") == "engaged" and alive and iface:
+                return TunnelState.ENGAGED
+            return TunnelState.LEFTOVER
         exists = self._runner.interface_exists(self.interface)
         if record is not None:
             if record.get("state") == "engaged" and exists:
@@ -249,6 +349,18 @@ class TunnelGuard:
     def status(self) -> TunnelStatus:
         record = self._store.load_session() or {}
         state = self.detect_state()
+        if record.get("protocol") == "openvpn":
+            return TunnelStatus(
+                state=state,
+                mode=str(record.get("mode", "")),
+                profile_name=str(record.get("profile", "")),
+                intent_on=bool(record.get("intent")),
+                protocol="openvpn",
+                dns_behavior=str(record.get("dns_behavior", "")),
+                removed_directives=list(record.get("removed_directives", []) or []),
+                openvpn_pid=record.get("openvpn_pid"),
+                kill_switch=KILLSWITCH_OPENVPN_LEVEL if state != TunnelState.ENGAGED else "",
+            )
         age = None
         fresh = False
         if self._runner.interface_exists(self.interface):
@@ -261,6 +373,7 @@ class TunnelGuard:
             handshake_age_s=age,
             handshake_fresh=fresh,
             intent_on=bool(record.get("intent")),
+            protocol=str(record.get("protocol", "wireguard") or "wireguard"),
         )
 
     # --- keypairs ------------------------------------------------------
@@ -286,7 +399,7 @@ class TunnelGuard:
     def engage(self, profile: TunnelProfile, mode: str = "vpn+blocker") -> EngageResult:
         name = profile.name or ""
         if profile.protocol == "openvpn":
-            return EngageResult(False, OPENVPN_PHASE1_MESSAGE, name)
+            return self._engage_openvpn(profile, mode=mode)
         if profile.protocol != "wireguard":
             return EngageResult(
                 False,
@@ -480,6 +593,109 @@ class TunnelGuard:
         except OSError:
             pass
 
+    # --- OpenVPN engage (Phase 2) -------------------------------------
+
+    def _engage_openvpn(self, profile: TunnelProfile, mode: str = "vpn+blocker") -> EngageResult:
+        name = profile.name or ""
+        if not self._runner.is_root():
+            return EngageResult(False, "Opening a tunnel changes this machine's routes, so it needs root. Run it with sudo — nothing was changed.", name)
+        if self._runner.which("openvpn") is None:
+            return EngageResult(False, MISSING_OPENVPN_MESSAGE, name)
+        start_fn = getattr(self._runner, "openvpn_start", None)
+        if start_fn is None:
+            return EngageResult(False, MISSING_OPENVPN_MESSAGE, name)
+        current = self._store.load_session()
+        if current is not None and current.get("state") == "engaged":
+            stopped = self.disengage()
+            if not stopped.ok:
+                return EngageResult(False, f"Another tunnel is up and Sphinx could not bring it down cleanly first: {stopped.message} Nothing else was changed.", name)
+        sanitized = render_session_config(profile.export_text())
+        record = {
+            "version": 1, "state": "engaged", "mode": mode, "profile": name,
+            "protocol": "openvpn", "interface": OPENVPN_INTERFACE,
+            "endpoint": profile.endpoint, "intent": False,
+            "engaged_at_ms": int(time.time() * 1000),
+            "dns_behavior": OPENVPN_DNS_BEHAVIOR,
+            "dns_note": "Pushed DNS was pull-filter-rejected; the resolver in force before the tunnel stands unchanged, so restore is exact because DNS never moved.",
+            "removed_directives": list(sanitized.removed),
+            "kill_switch_level": KILLSWITCH_OPENVPN_LEVEL,
+            "source": getattr(profile, "source", "") or "",
+            "pre_tunnel": {
+                "default_routes": self._runner.default_routes(),
+                "dns_record_present": (self._store.state_dir / "dns-backup.json").is_file(),
+            },
+        }
+        try:
+            self._store.save_session(record)
+        except OSError as exc:
+            return EngageResult(False, f"Sphinx could not save the pre-tunnel state ({exc}), so it changed nothing.", name)
+        if self._store.load_session() != record:
+            return EngageResult(False, "Sphinx could not verify the saved pre-tunnel state by reading it back, so it changed nothing.", name)
+        config_path = self._ovpn_config_path()
+        try:
+            write_secret_atomically(config_path, sanitized.text.encode("utf-8"))
+        except OSError as exc:
+            self._mark_leftover(record, f"could not write the tunnel config: {exc}")
+            return EngageResult(False, f"The tunnel config could not be written ({exc}); nothing was connected.", name)
+        argv = [self._runner.which("openvpn") or "openvpn", "--config", str(config_path),
+                "--dev", OPENVPN_INTERFACE, "--nobind"]  # --dev after --config overrides the config's dev name; its type (tun) stands
+        pid, err = start_fn(argv, str(self._ovpn_log_path()))
+        if not pid:
+            self._mark_leftover(record, f"openvpn did not start: {err}")
+            return EngageResult(False, f"openvpn did not start ({err or 'no reason given'}). The record was kept as a leftover; nothing claims to be connected.", name)
+        record["openvpn_pid"] = pid
+        # Proof: process alive AND its tun interface present.
+        alive_fn = getattr(self._runner, "openvpn_alive", lambda p: False)
+        # Give a real client a moment to create the interface; fakes are instant.
+        proven = False
+        for _ in range(25):
+            if alive_fn(pid) and self._runner.interface_exists(OPENVPN_INTERFACE):
+                proven = True
+                break
+            if not alive_fn(pid):
+                break
+            time.sleep(0.2)
+        if not proven:
+            stop_fn = getattr(self._runner, "openvpn_stop", lambda p: True)
+            try:
+                stop_fn(pid)
+            except Exception:
+                pass
+            self._mark_leftover(record, "openvpn engage did not prove; rolled back")
+            return EngageResult(False, "The OpenVPN client started but did not prove it is carrying traffic (the process died or its tunnel interface never appeared) — it was stopped and the record kept; Sphinx never claims 'connected' without that proof.", name)
+        record["intent"] = True
+        try:
+            self._store.save_session(record)
+        except OSError:
+            pass
+        removed_note = ""
+        if sanitized.removed:
+            removed_note = " Sanitized before connecting — removed: " + ", ".join(sanitized.removed) + "."
+        return EngageResult(True, f"VPN on — '{name}' is connected and proven (OpenVPN process running, tunnel interface up). DNS: pushed servers were rejected; the resolver in force before the tunnel stands.{removed_note}", name)
+
+    def _disengage_openvpn(self, record: dict) -> RestoreResult:
+        pid = record.get("openvpn_pid")
+        stop_fn = getattr(self._runner, "openvpn_stop", None)
+        alive_fn = getattr(self._runner, "openvpn_alive", None)
+        alive = bool(alive_fn(pid)) if (alive_fn and pid) else False
+        if alive:
+            if stop_fn is None or not stop_fn(pid):
+                return RestoreResult(False, "openvpn could not be stopped and verified gone. The tunnel record was kept and DNS was not touched — the teardown order is tunnel first, then DNS.")
+            if alive_fn(pid):
+                return RestoreResult(False, "openvpn is still running after a stop attempt. The tunnel record was kept and DNS was not touched.")
+        if self._dns_restore is not None:
+            result = self._dns_restore()
+            if not getattr(result, "ok", True):
+                self._mark_leftover(record, "tunnel down; DNS restore did not verify")
+                return RestoreResult(False, f"The tunnel is down, but restoring DNS did not verify: {getattr(result, 'message', '')} The records were kept — 'sphinx status' shows the state.")
+        self._store.clear_session()
+        try:
+            self._ovpn_config_path().unlink(missing_ok=True)
+        except OSError:
+            pass
+        name = record.get("profile", "")
+        return RestoreResult(True, f"VPN off{f' — {name} disconnected' if name else ''}. Your DNS settings are as they were before the tunnel (pushed DNS was rejected, so they never moved).")
+
     # --- disengage ---------------------------------------------------------
 
     def disengage(self) -> RestoreResult:
@@ -493,6 +709,8 @@ class TunnelGuard:
                 "it needs root. Run it with sudo — nothing was changed.",
             )
         record = self._store.load_session()
+        if record is not None and record.get("protocol") == "openvpn":
+            return self._disengage_openvpn(record)
         if record is None and not self._runner.interface_exists(self.interface):
             return RestoreResult(True, "No VPN tunnel is up.")
         config_path = self._config_path()

@@ -131,12 +131,16 @@ def test_missing_tools_refusal_names_the_remedy(tmp_path):
     assert "sudo apt install wireguard-tools" in result.message
 
 
-def test_openvpn_profile_is_refused_at_connect_with_the_reason(tmp_path):
+def test_openvpn_without_a_process_runner_is_an_honest_refusal(tmp_path):
+    # The Phase 1 fake has no openvpn process methods: Phase 2's
+    # guard must refuse honestly (naming the openvpn remedy), never
+    # half-connect. Full OpenVPN behavior is in test_openvpn_guard.py.
     runner = FakeRunner()
     guard, _store = _guard(tmp_path, runner)
     result = guard.engage(parse_config(OPENVPN))
     assert not result.ok
-    assert "Phase 2" in result.message and "OpenVPN" in result.message
+    assert "OpenVPN is not installed" in result.message
+    assert "sudo apt install openvpn" in result.message
     assert not runner.calls  # nothing was even attempted
 
 

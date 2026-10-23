@@ -73,11 +73,12 @@ def test_openvpn_imports_labeled_and_connect_is_refused(env, capsys):
     path = _write(env, "node.ovpn", OPENVPN)
     assert cli.main(["vpn", "profile", "import", "--name", "Node", path]) == 0
     out = capsys.readouterr().out
-    assert "OpenVPN" in out and "Phase 2" in out
+    assert "OpenVPN" in out and "Phase 2" not in out  # Phase 2: connectable now
     assert cli.main(["vpn", "profile", "list"]) == 0
     assert "OpenVPN" in capsys.readouterr().out
+    # Connecting on a test machine (not root / no openvpn) is an
+    # honest refusal, never a claim of connection.
     assert cli.main(["vpn", "connect", "Node"]) == cli.EXIT_REFUSED
-    assert "Phase 2" in capsys.readouterr().out
 
 
 def test_vpn_status_is_honest_when_off(env, capsys):

@@ -46,6 +46,7 @@ from .core.tunnel import (
     server_peer_stanza,
 )
 from .core.tunnelstore import TunnelStore
+from .core import vpngate as _vpngate_mod
 from .core.updater import ListUpdater
 from .resolver.guard import (
     DnsGuard,
@@ -60,6 +61,14 @@ from .tunnel.guard import RealTunnelRunner, TunnelGuard, TunnelState
 
 EXIT_OK = 0
 EXIT_REFUSED = 2
+
+#: Injectable VPN Gate fetcher (tests monkeypatch this; production
+#: uses vpngate.default_fetcher). Tests NEVER hit the live feed.
+_vpngate_fetcher = None
+
+
+def _fetch_vpngate_rows():
+    return _vpngate_mod.get_directory(paths.state_dir(), fetcher=_vpngate_fetcher)
 
 
 def _guard() -> DnsGuard:
@@ -421,6 +430,38 @@ def _vpn_status_lines() -> List[str]:
     if status.state == TunnelState.DISENGAGED:
         return ["  VPN: off — no tunnel is up and no server is selected."]
     lines = []
+    if getattr(status, "protocol", "") == "openvpn":
+        if status.state == TunnelState.ENGAGED and status.connected:
+            lines.append(
+                f"  VPN: on — '{status.profile_name}' is connected and "
+                "proven (OpenVPN process running, tunnel interface up)."
+            )
+            lines.append(
+                "  VPN DNS: pushed DNS was rejected — the resolver in "
+                "force before the tunnel stands, unfiltered by the "
+                "tunnel itself (in VPN+Blocker, Sphinx's filter still "
+                "fronts DNS as it did before)."
+            )
+            if status.removed_directives:
+                lines.append(
+                    "  OpenVPN config sanitized before connecting — removed: "
+                    + ", ".join(status.removed_directives) + "."
+                )
+        else:
+            lines.append(
+                "  VPN: disconnected — the OpenVPN tunnel is not proven "
+                "up. DNS was never re-pointed (pushed DNS is rejected), "
+                "so DNS stays with the resolver in force before the "
+                "tunnel. Note the honest limit: unlike WireGuard, "
+                "Sphinx cannot blackhole general traffic after an "
+                "unexpected openvpn exit, because openvpn removes its "
+                "own routes as it dies. Reconnect (sudo sphinx vpn "
+                f"connect {status.profile_name or '<name>'}) or "
+                "disconnect on purpose (sudo sphinx vpn disconnect)."
+            )
+        if status.mode in _MODE_WORDS:
+            lines.append(f"  VPN mode: {_MODE_WORDS[status.mode]}")
+        return lines
     if status.state == TunnelState.ENGAGED and status.handshake_fresh:
         lines.append(
             f"  VPN: on — '{status.profile_name}' is connected and "
@@ -477,7 +518,8 @@ def _cmd_vpn_profile(args: argparse.Namespace) -> int:
                 if p.protocol == "openvpn":
                     print(
                         f"  {p.name} — OpenVPN, server {p.endpoint} "
-                        "(stored and labeled; connecting arrives in Phase 2)"
+                        "(connectable — Sphinx invokes the system openvpn; "
+                        "see 'sphinx vpn public' for public volunteer servers)"
                     )
                 else:
                     print(
@@ -545,9 +587,9 @@ def _cmd_vpn_profile(args: argparse.Namespace) -> int:
         if profile.protocol == "openvpn":
             print(
                 f"Server profile '{name}' saved — OpenVPN, server "
-                f"{profile.endpoint}. In Phase 1 an OpenVPN profile "
-                "is stored and labeled; connecting with it arrives "
-                "in Phase 2 and is refused, with this reason, until then."
+                f"{profile.endpoint}. It connects through the system "
+                "openvpn (sanitized first — script and persistence "
+                "directives are stripped and named)."
             )
         else:
             print(
@@ -615,16 +657,110 @@ def _cmd_vpn_profile(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _public_row_profile(row):
+    from .core.tunnel import parse_config as _pc
+    profile = _pc(row.config_text())
+    profile.name = row.label
+    try:
+        profile.source = "vpngate"  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    return profile
+
+
+def _cmd_vpn_public(args: argparse.Namespace) -> int:
+    action = getattr(args, "vpn_public_action", None)
+    if action is None:
+        print(
+            "Say what to do: sphinx vpn public list, sphinx vpn "
+            "public connect <row>, or sphinx vpn public import <row> <name>."
+        )
+        return EXIT_REFUSED
+    if action == "list":
+        print(_vpngate_mod.DISCLOSURE)
+        result = _fetch_vpngate_rows()
+        if not result.rows:
+            print(_vpngate_mod.EMPTY_STATE)
+            return EXIT_REFUSED
+        if not result.live and result.cache is not None:
+            print(f"Cached list — {result.cache.age_label()}. Cached rows are not live.")
+        else:
+            print("Live list fetched just now from VPN Gate.")
+        print("Public volunteer servers:")
+        for i, row in enumerate(result.rows, start=1):
+            print(f"  {i}. {row.label} — score {row.score or '?'}, ping {row.ping or '?'} ms, {row.ip}")
+        return EXIT_OK
+    # connect / import both need a row; disclosure rides first, always.
+    print(_vpngate_mod.DISCLOSURE)
+    if not _is_root():
+        return _root_refusal("Using a public server", f"vpn public {action}")
+    result = _fetch_vpngate_rows()
+    if not result.rows:
+        print(_vpngate_mod.EMPTY_STATE)
+        return EXIT_REFUSED
+    if not result.live and result.cache is not None:
+        print(f"Using the cached list — {result.cache.age_label()}.")
+    try:
+        row_no = int(args.row)
+    except (TypeError, ValueError):
+        print(f"'{args.row}' is not a row number from 'sphinx vpn public list' — nothing was changed.")
+        return EXIT_REFUSED
+    if not (1 <= row_no <= len(result.rows)):
+        print(f"There is no row {row_no} in the public list ({len(result.rows)} rows) — nothing was changed.")
+        return EXIT_REFUSED
+    row = result.rows[row_no - 1]
+    try:
+        profile = _public_row_profile(row)
+    except Exception as exc:
+        print(f"That server's config could not be used: {exc} — nothing was changed.")
+        return EXIT_REFUSED
+    if action == "import":
+        name = (args.name or "").strip()
+        if not name:
+            print("Import needs a name: sphinx vpn public import <row> <name> — nothing was changed.")
+            return EXIT_REFUSED
+        store = _tunnel_store()
+        if store.get(name) is not None:
+            print(f"A server profile called '{name}' already exists — nothing was written over it.")
+            return EXIT_REFUSED
+        profile.name = name
+        try:
+            stored = store.save(profile)
+        except (ValueError, OSError) as exc:
+            print(f"That profile could not be saved: {exc}")
+            return EXIT_REFUSED
+        # Source recorded in the profile record (sidecar next to the profile file).
+        try:
+            import json as _json
+            sidecar = stored.path.with_suffix(".source.json")
+            sidecar.write_text(_json.dumps({"source": "vpngate", "hostname": row.hostname, "country_long": row.country_long, "label": row.label}), encoding="utf-8")
+        except OSError:
+            pass
+        print(f"Server profile '{name}' saved — {row.label}, source: vpngate. Sanitization happens at connect time, and the removals are named then.")
+        return EXIT_OK
+    # connect — the command itself is the consent; disclosure was printed above.
+    mode = args.mode if getattr(args, "mode", None) else ("vpn+blocker" if _guard().detect_state() == DnsState.ENGAGED else "vpn")
+    result2 = _tunnel_guard().engage(profile, mode=mode)
+    print(result2.message)
+    if result2.ok:
+        print(f"  Mode: {_MODE_WORDS[mode]}")
+        print("  Disconnecting returns this machine to the mode it had before the VPN (Blocker only, or Off).")
+    return EXIT_OK if result2.ok else EXIT_REFUSED
+
+
 def _cmd_vpn(args: argparse.Namespace) -> int:
     action = args.vpn_action
     if action is None:
         print(
             "Say what to do: sphinx vpn profile …, sphinx vpn "
-            "connect <name>, sphinx vpn disconnect, or sphinx vpn status."
+            "connect <name>, sphinx vpn disconnect, sphinx vpn "
+            "status, or sphinx vpn public …."
         )
         return EXIT_REFUSED
     if action == "profile":
         return _cmd_vpn_profile(args)
+    if action == "public":
+        return _cmd_vpn_public(args)
     if action == "status":
         for line in _vpn_status_lines():
             print(line)
@@ -798,7 +934,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         action_parser.add_argument("name", help="the profile name")
     vpn_parser = sub.add_parser(
         "vpn",
-        help="VPN mode: server profiles and the tunnel (WireGuard connects in Phase 1; OpenVPN profiles are stored and labeled, connections arrive in Phase 2)",
+        help="VPN mode: server profiles and the tunnel (WireGuard and OpenVPN connect; OpenVPN invokes the system openvpn)",
     )
     vpn_sub = vpn_parser.add_subparsers(dest="vpn_action")
     vpn_profile_parser = vpn_sub.add_parser(
@@ -834,6 +970,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     vpn_sub.add_parser("disconnect", help="disconnect the tunnel and put DNS back as it was (needs sudo)")
     vpn_sub.add_parser("status", help="show the VPN state, proven — never claimed from intent")
+    public_parser = vpn_sub.add_parser("public", help="public volunteer servers from VPN Gate — strangers' machines; the disclosure prints at point of use")
+    public_sub = public_parser.add_subparsers(dest="vpn_public_action")
+    public_sub.add_parser("list", help="fetch and list public volunteer servers (disclosure first)")
+    pub_connect = public_sub.add_parser("connect", help="connect to a listed public server by row number (disclosure first; needs sudo)")
+    pub_connect.add_argument("row", help="the row number from 'sphinx vpn public list'")
+    pub_connect.add_argument("--mode", choices=("vpn", "vpn+blocker"), default=None)
+    pub_import = public_sub.add_parser("import", help="store a listed public server as a named profile (source: vpngate; needs sudo)")
+    pub_import.add_argument("row", help="the row number from 'sphinx vpn public list'")
+    pub_import.add_argument("name", help="the profile name to store it under")
     args = parser.parse_args(argv)
     handlers = {
         "serve": _cmd_serve,

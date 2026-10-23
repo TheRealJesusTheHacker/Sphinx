@@ -3,6 +3,7 @@ Version: @VERSION@
 Architecture: all
 Maintainer: Sentinel Safeguard LLC <Sentinelsafeguard@outlook.com>
 Depends: python3 (>= 3.10), systemd, wireguard-tools
+Recommends: openvpn
 Section: net
 Priority: optional
 Homepage: https://github.com/TheRealJesusTheHacker/Sphinx

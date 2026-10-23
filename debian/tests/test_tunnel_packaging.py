@@ -21,3 +21,10 @@ def test_prerm_tears_the_tunnel_down_first_or_stops():
     assert prerm.index("tunnel-state.json") < prerm.index("dns-backup.json")
     tunnel_block = prerm[: prerm.index("dns-backup.json")]
     assert "exit 1" in tunnel_block  # a tunnel that stays up stops removal
+
+def test_control_recommends_openvpn_not_hard_depends():
+    control = (DEBIAN_DIR / "packaging" / "control").read_text()
+    depends = next(l for l in control.splitlines() if l.startswith("Depends:"))
+    recommends = next(l for l in control.splitlines() if l.startswith("Recommends:"))
+    assert "openvpn" in recommends
+    assert "openvpn" not in depends  # WireGuard must work without it

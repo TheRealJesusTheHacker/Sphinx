@@ -227,7 +227,7 @@ Turning a machine's DNS over to anything is a trust exercise, so
 
 ## VPN mode
 
-Sphinx can also run a real VPN tunnel — a **WireGuard** tunnel to
+Sphinx can also run a real VPN tunnel — a **WireGuard** or **OpenVPN** tunnel to
 a server *you* choose, under the shared rules in
 [../docs/TUNNEL-SPEC.md](../docs/TUNNEL-SPEC.md). The disclosure
 that spec requires, stated here where the mode is offered:
@@ -296,24 +296,96 @@ that spec requires, stated here where the mode is offered:
   pre-VPN mode). Removing the package while a tunnel is up tears
   the tunnel down first — tunnel down, then DNS restore — and
   stops the removal loudly if the tunnel cannot be brought down.
-- **Phase 1 scope, honestly.** WireGuard profiles **connect**.
-  OpenVPN profiles are stored, labeled (`protocol: openvpn`),
-  and preserved losslessly from Phase 1, but **connecting with
-  one arrives in Phase 2** — in Phase 1 a connect attempt is
-  refused with that reason named, never silently ignored. The
-  public volunteer-server directory (VPN Gate) is likewise
-  Phase 2 and is not in this build.
+- **OpenVPN (Phase 2).** OpenVPN profiles now **connect**:
+  Sphinx invokes the system `openvpn` binary (GPLv2, arm's-length
+  — see licensing below) as a separate process, under the same
+  save-first / verify / exact-restore guard discipline as
+  WireGuard: the pre-tunnel state is saved and verified before
+  anything changes, connected is proven (the process is alive
+  *and* its tunnel interface `sphinxovpn` is up — never claimed
+  from intent or from a record), and disconnect/prerm tear the
+  tunnel down first, then restore DNS, stopping loudly when the
+  tunnel cannot be brought down. `openvpn` is a **Recommends**,
+  not a hard Depends: WireGuard works without it, and a missing
+  binary is an honest refusal naming the remedy
+  (`sudo apt install openvpn`).
+- **Config sanitization — strangers' text never runs as-is.**
+  An OpenVPN config would act as root, so before any connect
+  Sphinx strips — and names in the connect/status output, never
+  silently — the directives that execute code, persist, or write
+  files: `up`, `down`, `route-up`, `route-pre-down`, `plugin`,
+  `script-security`, `management`, `iproute`, `tls-verify`,
+  `auth-user-pass` *with a file argument*, `cd`, `chroot`,
+  `daemon`, `writepid`, `status`, and the log directives (`log`,
+  `log-append`, `syslog`), plus `client-connect`,
+  `client-disconnect`, `learn-address`, and `setenv`. The
+  sanitized result is the only text that runs. Sphinx passes no
+  `--script-security` flag; the posture is the *absence* of
+  script hooks. Its own flags are limited to `--config`,
+  `--dev sphinxovpn`, and `--nobind`.
+- **OpenVPN DNS — pushed DNS is rejected, on purpose.** Public
+  servers push DNS servers. Sphinx's one recorded behavior:
+  the session config carries
+  `pull-filter ignore "dhcp-option DNS"` (and DOMAIN /
+  DOMAIN-SEARCH), so pushed DNS is refused and the resolver in
+  force before the tunnel — the profile's/Sphinx's existing
+  resolver path — stands, unchanged. That choice is in the
+  tunnel record (`dns_behavior: pull-filter-reject-pushed-dns`),
+  restore is exact *because DNS never moved*, and nothing
+  changes the resolver silently or through resolvconf. In
+  VPN-only mode this means DNS is exactly what it was before
+  connecting (stated here and in status, truthfully); in
+  VPN + Blocker mode Sphinx's filter fronts DNS as it did
+  before the tunnel.
+- **OpenVPN kill-switch level — lower than WireGuard's, stated
+  plainly.** WireGuard's routes are Sphinx-managed, so a dead
+  WireGuard tunnel blackholes covered traffic. OpenVPN owns its
+  routes and removes them as it dies, so Sphinx **cannot**
+  blackhole general traffic after an unexpected `openvpn` exit.
+  What Sphinx does guarantee: DNS is never silently re-pointed
+  (it never moved — pushed DNS was rejected), the session record
+  shows as a leftover/disconnected state, and status announces
+  it with the two choices — reconnect, or disconnect on
+  purpose. Do not rely on an OpenVPN tunnel in Sphinx as a
+  general-traffic kill switch; that guarantee is WireGuard's.
+- **Public volunteer servers (VPN Gate directory).**
+  `sphinx vpn public list`, `sphinx vpn public connect <row>`,
+  and `sphinx vpn public import <row> <name>` offer the public
+  nodes from VPN Gate's published feed, fetched fresh at use
+  time (HTTPS, timeout-bounded, size-capped). The last good
+  fetch is cached in the state directory with its fetch time:
+  when the feed is unreachable the cache is served **labeled
+  with its age** ("list from N hours ago — the live list
+  couldn't be fetched"), never presented as live; with no cache
+  and a dead feed you get the honest empty state: "Couldn't
+  fetch the public server list — check your connection.
+  Nothing is bundled; there is no offline list." No snapshot is
+  ever bundled. `import` stores a row as a named profile with
+  its source recorded as `vpngate`. The disclosure, verbatim,
+  which `public list` prints first and `public connect` repeats
+  before connecting:
+
+  > These are strangers' machines, volunteered to a research
+  > project (VPN Gate, University of Tsukuba). The operator can
+  > see your traffic. VPN Gate states its servers keep
+  > connection logs — your real address, the times, the server
+  > you used — for three months or more. Fine for appearing to
+  > be somewhere else; not for anything sensitive.
+
 - **Licensing — invoked, not bundled.** This edition drives the
   kernel's WireGuard through `wireguard-tools` (`wg`,
   `wg-quick`) — GPL-2.0 programs (verified against the upstream
   repository's COPYING and the Debian package's own copyright
   file) that the package declares as a dependency
   (`Depends: wireguard-tools`) and executes as separate
-  processes. Nothing GPL is bundled, linked, or copied into
-  Sphinx; arm's-length execution of a system tool does not attach
-  its license to Sphinx, which stays MIT. If the tools are
-  missing, connecting refuses and names the remedy
-  (`sudo apt install wireguard-tools`).
+  processes. OpenVPN is the same pattern: the GPLv2 `openvpn`
+  binary is executed as a separate process and declared as
+  `Recommends: openvpn`. Nothing GPL is bundled, linked, or
+  copied into Sphinx; arm's-length execution of a system tool
+  does not attach its license to Sphinx, which stays MIT. If
+  the WireGuard tools are missing, connecting refuses and names
+  the remedy (`sudo apt install wireguard-tools`); likewise
+  OpenVPN above.
 
 ## The service
 
