@@ -8,6 +8,130 @@ never merely to make a report prettier).
 
 ---
 
+## Android surface hunt, Lane B — everything except the DNS forwarding core (2026-10-23)
+
+Scope: FILTER / APP_BLOCK arbitration, the allowlist and
+custom-entry stores, the blocklist update path, profiles,
+counters and the query log, consent flows, and the quick-settings
+tile — probed adversarially (malformed store files, hostile
+entries, oversized inputs) against base `f0de6a73` (0.4.1 + the
+SEV-1 fix; 120-test JVM baseline). The forwarding core
+(DnsPacket / DnsForwarder / the service's forwarding internals)
+was another lane's surface: defects noticed there were reported
+to the coordinator with evidence, not edited from this lane.
+
+### Fixed
+
+1. **Entries that can never match counted toward the sanity
+   gate.** `normalizeEntry` accepted labels over 63 characters
+   and names over 253 — shapes the DNS wire format (and so the
+   query parser) can never produce. A download padded with 1,000
+   such "entries" passed the ≥1,000-unique gate and replaced a
+   working list while blocking nothing extra. Entries past the
+   wire limits are now refused at the one door every entry path
+   shares. *(core/Blocklist.kt; BlocklistTest,
+   ListValidationTest)*
+
+2. **Profile state lines accepted list-file shapes they never
+   write.** `RuleState.parse` fed allow/custom values to the
+   list-file parser, which also accepts hosts-file lines and
+   strips trailing comments: a stored line
+   `allow<TAB>0.0.0.0 bank.example.com` silently allowlisted
+   `bank.example.com`, an entry that appears nowhere in the file
+   as a value. Values in the profile store's own format now go
+   through `normalizeEntry` alone — a stored state does exactly
+   what it appears to do. *(core/Profiles.kt; ProfilesTest)*
+
+3. **Update outcomes claimed a kept copy that did not exist.**
+   `ListUpdater.updateAll` reported "kept the previous copy" for
+   every failed source, including sources that had never
+   downloaded successfully and had no saved copy at all. The note
+   is now decided from the store's real saved-file state
+   (`failureNote`). *(lists/ListUpdater.kt; ListUpdaterNoteTest)*
+
+4. **Saving list sources never reloaded the running filter.**
+   `MainActivity.onSaveSources` was the one list-affecting edit
+   that skipped `notifyServiceReload()`: the service kept
+   questioning with a removed source's list (whose file the save
+   itself prunes) while the status line already showed the new
+   set. It reloads now, like every other list edit.
+   *(MainActivity.kt; SourcesSaveReloadTest)*
+
+### Documented and ignored
+
+- **The `Blocklist(entries)` constructor applies no parsing
+  rails** — already documented-and-ignored in the Phase 2 audit;
+  its premise was re-verified at this base: every production
+  construction goes through the parser or unions of parsed sets
+  (grep over all `Blocklist(` / `Allowlist(` constructions).
+- **IDN / underscore names are refused as entries** — the
+  Phase 2 audit's standing dismissal, re-verified: wire query
+  names are punycode, the shipped lists are punycode, and the
+  ASCII shape is common to every edition. Accepting Unicode
+  input by converting to punycode would change FILTER-SPEC
+  semantics; flagged to the coordinator as a spec question, not
+  changed unilaterally here.
+- **Per-source ≥1,000 gate when loading downloaded lists** —
+  matches FILTER-SPEC's update discipline ("the gate per source
+  and again on the merged set's unique domains"); the
+  `ListStore` doc phrase "together pass the sanity gate" is
+  loose wording over correct behavior.
+- **Partial-success list updates show the plain success string**
+  — the total it prints is truthful (the merged set now in
+  force), but it does not mention a source that failed. New
+  user-visible copy is the coordinator's call; item 3 makes the
+  underlying per-source report honest for whatever surface
+  consumes it.
+- **Fixed temp names in the store's atomic writes** — save
+  paths are serialized on the UI thread in the app's threading
+  model, loaders never read the `.tmp` name, and a crash leaves
+  at most a stray temp file beside an intact target. No
+  concurrent same-target writer exists to collide with.
+
+### Verified clean
+
+- **Tile decision table, all four combinations:** running →
+  stop (consent irrelevant); off + consent → start; off without
+  consent → open the app and start nothing. The tile never
+  claims a state the app would not claim (same flag, same
+  strings).
+- **Empty-population fallback:** every blocked app uninstalled
+  → APP_BLOCK population empty → the interface falls back to
+  FILTER; no empty-allowlist default-route interface can be
+  established. Excluded packages are correctly moot in
+  APP_BLOCK mode (every non-blocked app bypasses the VPN by
+  design, per FILTER-SPEC).
+- **Counters and the query log:** both counters increment at
+  the decision (an allowed query whose upstream fails is still
+  counted allowed, per spec); the log records the same decision
+  and nothing that did not happen; QueryLog and DropCounts are
+  synchronized throughout and hold their caps under the
+  existing concurrency tests.
+- **Consent and boot:** MainActivity, BootReceiver, and the
+  tile all treat `VpnService.prepare()` identically — no
+  consent, no start, no background UI. Boot's three gates hold
+  in order (opt-in, recorded intent, consent).
+- **Profiles under switch:** a switch writes live stores with
+  the write-through sync deliberately off and recomputes the
+  active marker from a fresh read (Phase 4 fixed item 2,
+  re-verified unchanged at this base).
+
+### Reported to the coordinator (Lane A files — not edited here)
+
+- `SphinxVpnService` returns `START_NOT_STICKY` for
+  ACTION_RELOAD_LISTS even while the filter is running; if the
+  platform takes the latest return as the service's restart
+  mode, a list edit could downgrade a running filter's
+  stickiness. Platform semantics need the forwarding lane's
+  call.
+- The blocked / allowed / drop counters and the query log are
+  process-lifetime statics, never reset on a stop/start inside
+  one process. The UI labels them as plain totals, which is
+  true per process; whether they should be per-session is a
+  product call.
+
+---
+
 ## Fleet Sweep #4 — Debian parity with the W-fix wave + supply-chain pinning (2026-10-23)
 
 Scope: the whole repo (all three editions) re-audited against
