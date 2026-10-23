@@ -17,10 +17,13 @@ snapshots of your allowlist and your own block entries — and
 restyles the window and tray in Sphinx's own palette (basalt,
 sandstone, bronze-gold). What does *not* exist yet: a background
 Windows *service* (Phase 2's host is a tray process — the section
-below says why, plainly). The release gate in the roadmap
-(independent audit → fix → re-audit, signed builds, published
-checksums) has not run for this edition; nothing here is a
-finished public release.
+below says why, plainly). This edition shipped as **v0.3.0 in
+Sphinx v1.0.0 (2026-10-23)**, after the release gate in the
+roadmap (independent audit → fix → re-audit, CI builds on the
+released commit, published checksums verified by re-download).
+The real-machine install → engage → uninstall pass named in the
+release notes is still owed — v1.0.0 shipped with that stated
+plainly, and this README won't pretend otherwise.
 
 ## How it works
 
@@ -135,10 +138,10 @@ exists.** The sign-in entry is removed; your data folder
 (lists, entries, settings) is left in place — removing the app
 must not quietly delete your data. Stated ceiling: the installer
 is compiled and its script pinned by tests in CI, but an
-install → engage → uninstall pass on a real machine belongs to
-the edition's release gate, alongside the other real-Windows
-proofs — it has not happened yet, and this README won't pretend
-otherwise.
+install → engage → uninstall pass on a real machine has not
+happened yet — v1.0.0 shipped with that pass named in its
+release notes as still owed, alongside the other real-Windows
+proofs, and this README won't pretend otherwise.
 
 ## Profiles (Phase 3)
 
