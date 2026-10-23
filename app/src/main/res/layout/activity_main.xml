@@ -394,6 +394,176 @@
             android:layout_marginTop="8dp"
             android:text="@string/button_battery_settings" />
 
+        <!-- VPN mode / TUNNEL (TUNNEL-SPEC) -->
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="40dp"
+            android:text="@string/section_vpn"
+            android:textColor="@color/sphinx_bronze_soft"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/vpn_disclosure"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/tunnelStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp" />
+
+        <Spinner
+            android:id="@+id/tunnelProfilesSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" />
+
+        <TextView
+            android:id="@+id/tunnelScopeText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/tunnelConnectButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/button_vpn_connect" />
+
+            <Button
+                android:id="@+id/tunnelConnectBlockerButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="8dp"
+                android:layout_weight="1"
+                android:text="@string/button_vpn_connect_blocker" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/tunnelDisconnectButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/button_vpn_disconnect" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/vpn_return_note"
+            android:textSize="14sp" />
+
+        <EditText
+            android:id="@+id/tunnelPasteEdit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:hint="@string/vpn_paste_hint"
+            android:inputType="textMultiLine"
+            android:minLines="3"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/tunnelImportPasteButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/button_vpn_import_paste" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/tunnelImportFileButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/button_vpn_import_file" />
+
+            <Button
+                android:id="@+id/tunnelImportQrButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="8dp"
+                android:layout_weight="1"
+                android:text="@string/button_vpn_import_qr" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/tunnelNewButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/button_vpn_new" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/tunnelExportButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/button_vpn_export" />
+
+            <Button
+                android:id="@+id/tunnelDeleteButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="8dp"
+                android:layout_weight="1"
+                android:text="@string/button_vpn_delete" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/tunnelExcludeButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/button_vpn_exclude" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/vpn_always_on_label"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/tunnelAlwaysOnButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/button_vpn_always_on" />
+
+        <Button
+            android:id="@+id/tunnelNoticesButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/button_vpn_notices" />
+
         <!-- Query log (Phase 2) -->
 
         <TextView

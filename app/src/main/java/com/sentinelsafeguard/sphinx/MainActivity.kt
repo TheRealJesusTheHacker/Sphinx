@@ -2,6 +2,9 @@ package com.sentinelsafeguard.sphinx
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -16,6 +19,9 @@ import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.Switch
 import android.widget.TextView
@@ -23,7 +29,14 @@ import android.widget.Toast
 import com.sentinelsafeguard.sphinx.core.Blocklist
 import com.sentinelsafeguard.sphinx.core.DropCounts
 import com.sentinelsafeguard.sphinx.core.ListSource
+import com.sentinelsafeguard.sphinx.core.OvpnProfile
+import com.sentinelsafeguard.sphinx.core.SphinxMode
+import com.sentinelsafeguard.sphinx.core.TunnelParseResult
+import com.sentinelsafeguard.sphinx.core.TunnelProfileParser
+import com.sentinelsafeguard.sphinx.core.TunnelQr
+import com.sentinelsafeguard.sphinx.core.WgProfile
 import com.sentinelsafeguard.sphinx.lists.ListStore
+import com.sentinelsafeguard.sphinx.lists.TunnelStore
 import com.sentinelsafeguard.sphinx.lists.ListUpdater
 import com.sentinelsafeguard.sphinx.vpn.SphinxVpnService
 import java.net.URI
@@ -88,6 +101,13 @@ class MainActivity : Activity() {
     private lateinit var logItemsText: TextView
     private lateinit var clearLogButton: Button
 
+    private lateinit var tunnelStatusText: TextView
+    private lateinit var tunnelProfilesSpinner: Spinner
+    private lateinit var tunnelScopeText: TextView
+    private lateinit var tunnelPasteEdit: EditText
+    private lateinit var tunnelStore: TunnelStore
+    private var pendingTunnelBlocker: Boolean = false
+
     private lateinit var store: ListStore
     private val handler = Handler(Looper.getMainLooper())
 
@@ -105,6 +125,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         store = ListStore(this)
+        tunnelStore = TunnelStore(this)
 
         statusText = findViewById(R.id.statusText)
         blockedText = findViewById(R.id.blockedText)
@@ -177,6 +198,67 @@ class MainActivity : Activity() {
             refreshLogView(force = true)
         }
 
+        findViewById<Button>(R.id.tunnelConnectButton).setOnClickListener {
+            onTunnelConnect(withBlocker = false)
+        }
+        findViewById<Button>(R.id.tunnelConnectBlockerButton).setOnClickListener {
+            onTunnelConnect(withBlocker = true)
+        }
+        findViewById<Button>(R.id.tunnelDisconnectButton).setOnClickListener {
+            startService(
+                Intent(this, SphinxVpnService::class.java)
+                    .setAction(SphinxVpnService.ACTION_STOP)
+            )
+            refreshUi()
+        }
+        findViewById<Button>(R.id.tunnelImportPasteButton).setOnClickListener {
+            onTunnelImportPaste()
+        }
+        findViewById<Button>(R.id.tunnelImportFileButton).setOnClickListener {
+            @Suppress("DEPRECATION")
+            startActivityForResult(
+                Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                },
+                REQUEST_TUNNEL_FILE,
+            )
+        }
+        findViewById<Button>(R.id.tunnelImportQrButton).setOnClickListener {
+            @Suppress("DEPRECATION")
+            startActivityForResult(
+                Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "image/*"
+                },
+                REQUEST_TUNNEL_QR,
+            )
+        }
+        findViewById<Button>(R.id.tunnelNewButton).setOnClickListener { onTunnelNewProfile() }
+        findViewById<Button>(R.id.tunnelExportButton).setOnClickListener { onTunnelExport() }
+        findViewById<Button>(R.id.tunnelDeleteButton).setOnClickListener { onTunnelDelete() }
+        findViewById<Button>(R.id.tunnelExcludeButton).setOnClickListener { onTunnelExclude() }
+        findViewById<Button>(R.id.tunnelAlwaysOnButton).setOnClickListener { openVpnSettings() }
+        findViewById<Button>(R.id.tunnelNoticesButton).setOnClickListener { showTunnelNotices() }
+        tunnelStatusText = findViewById(R.id.tunnelStatusText)
+        tunnelProfilesSpinner = findViewById(R.id.tunnelProfilesSpinner)
+        tunnelScopeText = findViewById(R.id.tunnelScopeText)
+        tunnelPasteEdit = findViewById(R.id.tunnelPasteEdit)
+        tunnelProfilesSpinner.onItemSelectedListener =
+            object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(
+                    parent: android.widget.AdapterView<*>?,
+                    view: View?,
+                    position: Int,
+                    id: Long,
+                ) {
+                    refreshTunnelScope()
+                }
+
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+            }
+        refreshTunnelView()
+
         refreshUi()
         refreshAllowlistView()
         refreshCustomView()
@@ -189,6 +271,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        refreshTunnelView()
         // The app picker may have changed the rules while we were gone;
         // the user may also have changed notification or battery
         // settings. Re-read all of it.
@@ -229,6 +312,59 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_VPN_CONSENT && resultCode == RESULT_OK) {
             startFilter()
+        }
+        if (requestCode == REQUEST_VPN_CONSENT_TUNNEL && resultCode == RESULT_OK) {
+            startTunnelService(pendingTunnelBlocker)
+        }
+        if (requestCode == REQUEST_TUNNEL_FILE && resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri != null) {
+                Thread({
+                    val text = try {
+                        contentResolver.openInputStream(uri)?.bufferedReader()
+                            ?.use { it.readText() }
+                    } catch (e: Exception) {
+                        null
+                    }
+                    val fallback = uri.lastPathSegment
+                        ?.substringAfterLast('/')?.substringBeforeLast('.')
+                    handler.post {
+                        if (text == null) {
+                            toast(getString(R.string.vpn_file_failed))
+                        } else {
+                            importTunnelText(text, fallback)
+                        }
+                    }
+                }, "sphinx-tunnel-file-import").start()
+            }
+        }
+        if (requestCode == REQUEST_TUNNEL_QR && resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri != null) {
+                Thread({
+                    val decodedText = try {
+                        val bitmap = contentResolver.openInputStream(uri)?.use {
+                            BitmapFactory.decodeStream(it)
+                        }
+                        if (bitmap == null) {
+                            null
+                        } else {
+                            val pixels = IntArray(bitmap.width * bitmap.height)
+                            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                            TunnelQr.decodeArgb(pixels, bitmap.width, bitmap.height)
+                        }
+                    } catch (e: Exception) {
+                        null
+                    }
+                    handler.post {
+                        if (decodedText == null) {
+                            toast(getString(R.string.vpn_qr_failed))
+                        } else {
+                            importTunnelText(decodedText, null)
+                        }
+                    }
+                }, "sphinx-tunnel-qr-import").start()
+            }
         }
     }
 
@@ -517,6 +653,349 @@ class MainActivity : Activity() {
             .show()
     }
 
+    // --- VPN mode / TUNNEL (TUNNEL-SPEC) --------------------------------
+    //
+    // The server picker starts EMPTY — no bundled servers, no
+    // samples. Profiles arrive only by the user's own hand:
+    // pasted config text, a picked config file, a QR image of the
+    // same config text, or a profile created here with keys
+    // generated on this phone. Export is the user's explicit
+    // action only, and the export dialog says the private key is
+    // inside it.
+
+    private fun selectedTunnelProfileName(): String? =
+        tunnelProfilesSpinner.selectedItem?.toString()
+
+    private fun refreshTunnelView() {
+        val profiles = tunnelStore.profiles()
+        val names = profiles.mapNotNull { it.name }
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, names)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        tunnelProfilesSpinner.adapter = adapter
+        tunnelProfilesSpinner.isEnabled = names.isNotEmpty()
+        refreshTunnelScope()
+        refreshTunnelStatusLine()
+    }
+
+    private fun refreshTunnelScope() {
+        val name = selectedTunnelProfileName()
+        val profile = name?.let { tunnelStore.profile(it) }
+        val errors = tunnelStore.profileErrors()
+        val errorLines = errors.entries.map { (file, reason) ->
+            "A stored profile ($file) could not be read: $reason. It was left untouched."
+        }
+        tunnelScopeText.text = when {
+            profile is WgProfile -> {
+                val scopeLine = getString(
+                    if (profile.scope == "all") R.string.vpn_scope_all else R.string.vpn_scope_some
+                )
+                val dnsLine = if (profile.dnsServers.isEmpty()) {
+                    "DNS: the system resolvers, reached through the tunnel."
+                } else {
+                    "DNS: ${profile.dnsServers.joinToString(", ")}"
+                }
+                (listOf(
+                    "${profile.name} — ${profile.endpoint ?: "no endpoint"}",
+                    scopeLine,
+                    dnsLine,
+                ) + errorLines).joinToString("\n")
+            }
+            profile is OvpnProfile ->
+                (listOf(getString(R.string.vpn_openvpn_note)) + errorLines).joinToString("\n")
+            else ->
+                (listOf(getString(R.string.vpn_profiles_empty)) + errorLines).joinToString("\n")
+        }
+    }
+
+    private fun refreshTunnelStatusLine() {
+        if (!::tunnelStatusText.isInitialized) return
+        val err = SphinxVpnService.lastTunnelError
+        tunnelStatusText.text = when {
+            SphinxVpnService.killSwitchBlocked ->
+                getString(R.string.vpn_status_kill_switch)
+            SphinxVpnService.tunnelActive && SphinxVpnService.tunnelConnectedFresh -> {
+                val base = getString(
+                    R.string.vpn_status_connected,
+                    SphinxVpnService.tunnelProfileName ?: "",
+                )
+                base + "\n" + getString(
+                    if (SphinxVpnService.tunnelWithBlocker) {
+                        R.string.vpn_status_blocker_on
+                    } else {
+                        R.string.vpn_status_unfiltered
+                    }
+                )
+            }
+            SphinxVpnService.tunnelActive -> getString(R.string.vpn_status_connecting)
+            err != null -> err
+            else -> getString(R.string.vpn_status_off)
+        }
+    }
+
+    private fun importTunnelText(text: String, fallbackName: String?) {
+        when (val result = tunnelStore.importProfile(text, fallbackName)) {
+            is TunnelParseResult.Valid -> {
+                tunnelPasteEdit.text.clear()
+                toast(getString(R.string.vpn_imported))
+                refreshTunnelView()
+            }
+            is TunnelParseResult.Refused ->
+                toast(getString(R.string.vpn_import_failed, result.reason))
+        }
+    }
+
+    private fun onTunnelImportPaste() {
+        val text = tunnelPasteEdit.text.toString()
+        if (text.isBlank()) {
+            toast(getString(R.string.vpn_import_failed, "empty"))
+            return
+        }
+        importTunnelText(text, null)
+    }
+
+    private fun onTunnelConnect(withBlocker: Boolean) {
+        val name = selectedTunnelProfileName()
+        if (name == null) {
+            toast(getString(R.string.vpn_profiles_empty))
+            return
+        }
+        val profile = tunnelStore.profile(name)
+        if (profile is OvpnProfile) {
+            AlertDialog.Builder(this)
+                .setTitle(name)
+                .setMessage(TunnelProfileParser.OPENVPN_CONNECT_REFUSAL)
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+            return
+        }
+        if (profile !is WgProfile) {
+            toast(getString(R.string.vpn_import_failed, "missing profile"))
+            return
+        }
+        // Record WHICH profile/mode is wanted (not intent — the
+        // service records intent only when the tunnel is
+        // genuinely up), then go through the same VPN consent
+        // discipline as the filter: no consent, no start.
+        tunnelStore.recordTunnelState(
+            TunnelStore.TunnelState(
+                mode = SphinxMode.OFF,
+                profileName = name,
+                intentOn = false,
+                withBlocker = withBlocker,
+                preVpnMode = if (SphinxVpnService.isRunning) {
+                    SphinxMode.FILTER
+                } else {
+                    SphinxMode.OFF
+                },
+            )
+        )
+        pendingTunnelBlocker = withBlocker
+        val consent = VpnService.prepare(this)
+        if (consent != null) {
+            @Suppress("DEPRECATION")
+            startActivityForResult(consent, REQUEST_VPN_CONSENT_TUNNEL)
+        } else {
+            startTunnelService(withBlocker)
+        }
+    }
+
+    private fun startTunnelService(withBlocker: Boolean) {
+        try {
+            startForegroundService(
+                Intent(this, SphinxVpnService::class.java).setAction(
+                    if (withBlocker) {
+                        SphinxVpnService.ACTION_START_TUNNEL_BLOCKER
+                    } else {
+                        SphinxVpnService.ACTION_START_TUNNEL
+                    }
+                )
+            )
+        } catch (e: Exception) {
+            startService(
+                Intent(this, SphinxVpnService::class.java).setAction(
+                    if (withBlocker) {
+                        SphinxVpnService.ACTION_START_TUNNEL_BLOCKER
+                    } else {
+                        SphinxVpnService.ACTION_START_TUNNEL
+                    }
+                )
+            )
+        }
+        maybeAskNotificationPermission()
+        refreshUi()
+    }
+
+    private fun onTunnelDelete() {
+        val name = selectedTunnelProfileName() ?: return
+        if (tunnelStore.deleteProfile(name)) {
+            toast(getString(R.string.vpn_deleted))
+        }
+        refreshTunnelView()
+    }
+
+    private fun onTunnelNewProfile() {
+        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun field(hint: String): EditText {
+            val edit = EditText(this)
+            edit.hint = hint
+            edit.textSize = 14f
+            container.addView(edit)
+            return edit
+        }
+        val nameEdit = field("Profile name")
+        val serverKeyEdit = field("Server public key")
+        val endpointEdit = field("Endpoint (host:port)")
+        val addressEdit = field("This phone's tunnel address (10.8.0.2/32)")
+        val dnsEdit = field("DNS servers (optional)")
+        AlertDialog.Builder(this)
+            .setTitle(R.string.vpn_new_title)
+            .setMessage(R.string.vpn_new_message)
+            .setView(container)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val dns = dnsEdit.text.toString()
+                    .split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                when (val result = tunnelStore.createLocalProfile(
+                    name = nameEdit.text.toString(),
+                    serverPublicKey = serverKeyEdit.text.toString(),
+                    endpoint = endpointEdit.text.toString(),
+                    clientAddress = addressEdit.text.toString(),
+                    dnsServers = dns,
+                )) {
+                    is TunnelParseResult.Valid -> {
+                        val profile = result.profile as WgProfile
+                        val publicKey = try {
+                            com.wireguard.crypto.KeyPair(
+                                com.wireguard.crypto.Key.fromBase64(profile.privateKey!!)
+                            ).publicKey.toBase64()
+                        } catch (e: Exception) {
+                            ""
+                        }
+                        AlertDialog.Builder(this)
+                            .setTitle(R.string.vpn_new_title)
+                            .setMessage(getString(R.string.vpn_new_created, publicKey))
+                            .setPositiveButton(android.R.string.ok, null)
+                            .show()
+                        refreshTunnelView()
+                    }
+                    is TunnelParseResult.Refused ->
+                        toast(getString(R.string.vpn_import_failed, result.reason))
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun onTunnelExport() {
+        // The user's explicit action — the only path by which a
+        // private key leaves app-private storage.
+        val name = selectedTunnelProfileName() ?: return
+        val text = tunnelStore.exportText(name) ?: return
+        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val note = TextView(this)
+        note.text = getString(R.string.vpn_export_note)
+        container.addView(note)
+        val qrMatrix = TunnelQr.encode(text)
+        if (qrMatrix != null) {
+            val size = qrMatrix.width
+            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            for (y in 0 until size) {
+                for (x in 0 until size) {
+                    bitmap.setPixel(x, y, if (qrMatrix[x, y]) Color.BLACK else Color.WHITE)
+                }
+            }
+            val image = ImageView(this)
+            image.setImageBitmap(
+                Bitmap.createScaledBitmap(bitmap, 720, 720, false)
+            )
+            image.adjustViewBounds = true
+            container.addView(image)
+        }
+        val textView = TextView(this)
+        textView.text = text
+        textView.textSize = 11f
+        textView.setTextIsSelectable(true)
+        val scroll = ScrollView(this)
+        scroll.addView(textView)
+        container.addView(scroll)
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.vpn_export_title) + " — " + name)
+            .setView(container)
+            .setNeutralButton(R.string.button_vpn_share_export) { _, _ ->
+                val share = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, text)
+                }
+                startActivity(Intent.createChooser(share, name))
+            }
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
+    private fun onTunnelExclude() {
+        // The tunnel exclusion picker, with the bypass truth
+        // stated at the point of choice (TUNNEL-SPEC).
+        Thread({
+            val apps = try {
+                packageManager.getInstalledApplications(0)
+                    .map { info -> info.packageName to labelFor(info.packageName) }
+                    .sortedBy { it.second.lowercase() }
+            } catch (e: Exception) {
+                emptyList()
+            }
+            val excluded = tunnelStore.tunnelExcludedPackages()
+            val labels = apps.map { it.second }.toTypedArray()
+            val checked = BooleanArray(apps.size) { apps[it].first in excluded }
+            handler.post {
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.button_vpn_exclude)
+                    .setMessage(R.string.vpn_exclude_truth)
+                    .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                        checked[which] = isChecked
+                    }
+                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                        val next = apps.filterIndexed { index, _ -> checked[index] }
+                            .map { it.first }.toSet()
+                        tunnelStore.saveTunnelExcludedPackages(next)
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }
+        }, "sphinx-tunnel-app-list").start()
+    }
+
+    /** Android's own VPN settings (always-on VPN, "block
+     *  connections without VPN"): offered as the user's choice,
+     *  in the system's screen — Sphinx never changes them. */
+    private fun openVpnSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
+        } catch (e: Exception) {
+            toast(getString(R.string.vpn_always_on_failed))
+        }
+    }
+
+    private fun showTunnelNotices() {
+        val text = try {
+            assets.open("third-party/THIRD-PARTY-NOTICES.txt").bufferedReader()
+                .use { it.readText() } +
+                "\n\nThe full Apache-2.0 and MIT license texts ship with the app " +
+                "in assets/third-party (LICENSE-APACHE-2.0.txt, " +
+                "LICENSE-WIREGUARD-GO-MIT.txt)."
+        } catch (e: Exception) {
+            "Notices file missing from this build."
+        }
+        val textView = TextView(this)
+        textView.text = text
+        textView.textSize = 12f
+        val scroll = ScrollView(this)
+        scroll.addView(textView)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.vpn_notices_title)
+            .setView(scroll)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
     // --- Battery (Phase 4) ---------------------------------------------------
 
     private fun refreshBatteryView() {
@@ -560,6 +1039,7 @@ class MainActivity : Activity() {
         )
         blockedText.text = getString(R.string.counter_blocked, SphinxVpnService.blockedCount.get())
         allowedText.text = getString(R.string.counter_allowed, SphinxVpnService.allowedCount.get())
+        refreshTunnelStatusLine()
         refreshDropsView()
         refreshLogView(force = false)
     }
@@ -625,6 +1105,9 @@ class MainActivity : Activity() {
     companion object {
         private const val REQUEST_VPN_CONSENT = 1001
         private const val REQUEST_NOTIFICATIONS = 1002
+        private const val REQUEST_TUNNEL_FILE = 4101
+        private const val REQUEST_TUNNEL_QR = 4102
+        private const val REQUEST_VPN_CONSENT_TUNNEL = 4103
         private const val REFRESH_MS = 500L
         private const val LOG_LINES_SHOWN = 30
     }
