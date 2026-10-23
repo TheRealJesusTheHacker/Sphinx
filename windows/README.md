@@ -42,8 +42,8 @@ README won't pretend otherwise.
   result says so. Blocked names get the spec's sinkhole answer
   (0.0.0.0 / ::, TTL 60); allowed queries are forwarded unchanged
   to 1.1.1.1 (fallback 9.9.9.9) under the spec's answer-validation
-  rules — connected socket, matching ID, response bit, one overall
-  3-second deadline — with truncated answers completed over TCP.
+  rules — connected socket, matching ID, response bit, a 3-second
+  deadline per resolver — with truncated answers completed over TCP.
 - Everything runs on this machine. There is no Sphinx server, no
   account, and the query log never leaves memory.
 
