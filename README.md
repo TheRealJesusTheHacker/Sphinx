@@ -136,8 +136,8 @@ the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md
    start-at-sign-in that resumes protection under the same intent
    discipline as the Android edition. One-file exe, a portable
    edition, and an installer whose uninstaller restores your DNS
-   settings before it removes anything. *Shipped as v0.3.0 in
-   v1.0.0 (2026-10-23) — Phases 1–3 (core filter service; tray
+   settings before it removes anything. *Current release v0.3.1 in
+   v1.0.1 (2026-10-23; first shipped as v0.3.0 in v1.0.0) — Phases 1–3 (core filter service; tray
    host, start-at-sign-in, installer; profiles and the Sphinx
    palette); see [windows/README.md](windows/README.md).*
 3. **Debian/Linux** — a local DNS-filter daemon (systemd service)
@@ -145,27 +145,31 @@ the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md
    commands under the same restore discipline (a plain
    /etc/resolv.conf rewritten byte-exactly-restorable, or a
    systemd-resolved runtime override restored by revert — never a
-   pinned DHCP lease). *Shipped as 0.2.0 in v1.0.0 (2026-10-23) —
-   Phases 1–2 (daemon, guard, CLI, .deb; manual list updates,
+   pinned DHCP lease). *Current release 0.2.1 in v1.0.1 (2026-10-23; first
+   shipped as 0.2.0 in v1.0.0) — Phases 1–2 (daemon, guard, CLI, .deb; manual list updates,
    rule stores, profiles, and boot/route-change resumption) — see
    [debian/README.md](debian/README.md).*
 4. Further platforms as feasible after those three.
 
 All three editions exist today. The Windows and Debian editions
-are released (v1.0.0, 2026-10-23); the Android edition is
+are released (current release v1.0.1, 2026-10-23); the Android edition is
 feature-complete and audited but not yet in a release, for the
 signing-key reason stated plainly in the Status section below.
 
 ## Status
 
-**v1.0.0 — the first public release — was published on
-2026-10-23.** It carries the Windows edition (v0.3.0) and the
-Debian edition (0.2.0), built from the audited commit, with
-published checksums verified by re-download. Its release notes
-name what is proven and what is not: the three real-machine
-passes (Android phone, Windows machine, Debian machine) are
-still owed, and until they land v1.0.0 is audited, tested
-software whose last hardware proofs are still in front of it.
+**v1.0.1 — the current release — was published on
+2026-10-23.** It carries the Windows edition (v0.3.1) and the
+Debian edition (0.2.1): the post-v1.0.0 fix wave and the Debian
+parity fixes, built from the release commit, with published
+checksums verified by re-download. **v1.0.0 — the first public
+release — was published the same day**, carrying the Windows
+edition (v0.3.0) and the Debian edition (0.2.0). Both releases'
+notes name what is proven and what is not: the three
+real-machine passes (Android phone, Windows machine, Debian
+machine) are still owed, and until they land Sphinx is
+audited, tested software whose last hardware proofs are still
+in front of it.
 
 The **Android edition is feature-complete** per the
 [roadmap](docs/ROADMAP.md). The DNS filter runs on a bundled
@@ -178,7 +182,7 @@ app from filtering, or block an app outright — with the trade
 stated plainly above); per-app drop counters; profiles; an
 opt-in start on boot; and plain battery handling. The edition
 has passed the same build → audit → fix → re-audit gate as the
-shipped editions. It is **not** in v1.0.0 for one plain reason:
+shipped editions. It is **not** in any release yet, for one plain reason:
 a public release APK must be signed with the owner's release
 keystore, and that key does not exist yet. The Android APK joins
 a release as soon as that one owner step is done; no
@@ -188,8 +192,9 @@ Fixes landed on `main` after the v1.0.0 commit — the
 quick-settings tile, truncated-answer completion over TCP, the
 Windows W-1–W-7 restore-discipline fixes, and the Fleet Sweep #4
 Debian parity fixes (the liveness-proof timeout and the atomic-
-write durability fixes, carried to the Debian edition) — are
-**not** in v1.0.0. They ship in a later release.
+write durability fixes, carried to the Debian edition) — were
+**not** in v1.0.0. They shipped in **v1.0.1** (2026-10-23),
+the current release.
 
 ## Building
 
