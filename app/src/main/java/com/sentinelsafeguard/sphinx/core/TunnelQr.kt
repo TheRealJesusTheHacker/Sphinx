@@ -2,11 +2,14 @@ package com.sentinelsafeguard.sphinx.core
 
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
+import com.google.zxing.DecodeHintType
 import com.google.zxing.LuminanceSource
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.common.BitMatrix
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
+import java.util.EnumMap
+import java.util.EnumSet
 
 /**
  * QR import/export of tunnel profiles — TUNNEL-SPEC: Android
@@ -55,17 +58,38 @@ object TunnelQr {
         return decodeGray(gray, width, height)
     }
 
-    /** Decode a QR code from a grayscale raster. */
+    /** Decode a QR code from a grayscale raster. The reader is
+     *  restricted to QR codes: import accepts config text and
+     *  nothing else, and an unrestricted reader can hand back a
+     *  stray 1-D barcode's digits found inside a busy image
+     *  (observed in testing — a config code "decoded" to eight
+     *  digits that were never in it). Two reads are tried: the
+     *  ordinary read first (picked photos and screenshots, with
+     *  their perspective and lighting), then ZXing's
+     *  pure-barcode read for clean rendered codes — without it,
+     *  the detector can fail to size a dense, perfectly sharp
+     *  symbol at all, including this app's own exports. */
     fun decodeGray(gray: ByteArray, width: Int, height: Int): String? {
         if (width <= 0 || height <= 0 || gray.size < width * height) return null
-        return try {
-            val source = GrayLuminanceSource(width, height, gray)
+        val source = GrayLuminanceSource(width, height, gray)
+        val hints = EnumMap<DecodeHintType, Any>(DecodeHintType::class.java)
+        hints[DecodeHintType.POSSIBLE_FORMATS] = EnumSet.of(BarcodeFormat.QR_CODE)
+        tryDecode(source, hints)?.let { return it }
+        val pureHints = EnumMap<DecodeHintType, Any>(hints)
+        pureHints[DecodeHintType.PURE_BARCODE] = true
+        return tryDecode(source, pureHints)
+    }
+
+    private fun tryDecode(
+        source: LuminanceSource,
+        hints: Map<DecodeHintType, Any>,
+    ): String? =
+        try {
             val bitmap = BinaryBitmap(HybridBinarizer(source))
-            MultiFormatReader().decode(bitmap).text
+            MultiFormatReader().decode(bitmap, hints).text
         } catch (e: Exception) {
             null
         }
-    }
 
     /** Render a bit matrix into a grayscale raster (dark module
      *  = 0, light = 255), for display layers that draw pixels
