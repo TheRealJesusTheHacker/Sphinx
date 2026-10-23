@@ -94,12 +94,28 @@ class FilterEngine:
         query_log: Optional[QueryLog] = None,
         log_enabled: bool = True,
         clock_ms: Callable[[], int] = lambda: int(time.time() * 1000),
+        filter_enabled: Optional[Callable[[], bool]] = None,
+        on_error: Optional[Callable[[Exception], None]] = None,
     ):
         self._lists_provider = lists_provider
         self._forwarder = forwarder
         self.query_log = query_log if query_log is not None else QueryLog()
         self.log_enabled = log_enabled
         self._clock_ms = clock_ms
+        # VPN-only mode (TUNNEL-SPEC's mode model): the tunnel is
+        # up and the brain is NOT in the DNS path — every query is
+        # forwarded unfiltered and the query log (a blocker-path
+        # record, per TUNNEL-SPEC "Logging honesty") does not
+        # record it. Consulted per query so a mode change lands
+        # without a restart. None means always filtering.
+        self._filter_enabled = filter_enabled
+        # Internal failures must be SURFACED, never a silent
+        # swallow (TUNNEL-SPEC: Sphinx must never be the reason an
+        # unlisted name fails). handle_query still drops the one
+        # packet — one hostile packet must not kill the filter —
+        # but the daemon's hook reports it (its journal), so a
+        # systematic internal failure is visible, not silent.
+        self._on_error = on_error
         self._lock = threading.Lock()
         self.blocked_count = 0
         self.allowed_count = 0
@@ -129,6 +145,16 @@ class FilterEngine:
             query = parse_query(data)
             if query is None or query.is_response:
                 return None
+            if self._filter_enabled is not None and not self._filter_enabled():
+                # VPN-only mode: not a blocker path. The query is
+                # forwarded untouched — the filter questions names
+                # only where filtering is on (TUNNEL-SPEC, "The
+                # filter questions names; it does not block
+                # traffic") — and nothing is logged.
+                if record:
+                    with self._lock:
+                        self.allowed_count += 1
+                return self._forwarder(data)
             lists = self._lists_provider()
             blocked = lists.is_blocked(query.question_name)
             if record and self.log_enabled:
@@ -144,8 +170,15 @@ class FilterEngine:
                 with self._lock:
                     self.allowed_count += 1
             return self._forwarder(data)
-        except Exception:
-            # Dropped. Hostile input ends here, quietly.
+        except Exception as exc:
+            # Dropped — one hostile packet must not take the filter
+            # down — but never silently: the error is surfaced
+            # through the hook the daemon wires to its journal.
+            if self._on_error is not None:
+                try:
+                    self._on_error(exc)
+                except Exception:
+                    pass
             return None
 
 

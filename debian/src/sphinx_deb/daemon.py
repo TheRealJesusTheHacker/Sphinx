@@ -33,9 +33,53 @@ from .core.blocklist import FilterLists
 from .core.forwarder import UPSTREAM_RESOLVERS, forward_query
 from .core.server import DnsFilterServer, FilterEngine
 from .core.store import LiveState, Store
+from .core.tunnelstore import TunnelStore
 from .core.validation import DEFAULT_MIN_DOMAINS
 from .resolver.guard import DnsGuard, DnsState
 from .resolver.systemview import RealSystemView, is_loopback
+
+
+def tunnel_session(tunnel_store: TunnelStore) -> Optional[dict]:
+    """The tunnel guard's session record, when a tunnel is
+    engaged — read fresh on every call, so a connect/disconnect
+    lands in the running daemon without a restart (the same
+    reload discipline as the lists). A record in any other state
+    (leftover, mid-engage) is NOT an engaged tunnel: the daemon
+    never routes a query by a tunnel that is not proven up."""
+    try:
+        record = tunnel_store.load_session()
+    except Exception:
+        return None
+    if not record or record.get("state") != "engaged":
+        return None
+    return record
+
+
+def tunnel_upstreams(
+    tunnel_store: TunnelStore, fallback: List[str]
+) -> List[str]:
+    """The resolvers allowed queries go to right now: while a
+    tunnel is engaged, the profile's DNS servers — reached through
+    the tunnel, because the tunnel carries the routes — are the
+    upstream set (TUNNEL-SPEC's mode model), with the configured
+    upstreams behind them as the fallback chain. TUNNEL-SPEC's
+    unlisted-name principle: an unlisted query degrades through
+    every fallback the forwarder honestly has, never toward
+    silence; a failure that remains after the whole chain is the
+    upstreams' genuine failure. Blocked queries never reach this
+    choice: they are sinkholed locally by the engine, exactly as
+    without a tunnel."""
+    session = tunnel_session(tunnel_store)
+    if session is None:
+        return list(fallback)
+    stored = tunnel_store.get(str(session.get("profile", "")))
+    if stored is not None and stored.profile.dns:
+        chain = list(stored.profile.dns)
+        for server in fallback:
+            if server not in chain:
+                chain.append(server)
+        return chain
+    return list(fallback)
 
 
 class ConfigError(RuntimeError):
@@ -242,13 +286,35 @@ def run() -> int:
         )
         return 2
 
+    tunnel_store = TunnelStore(paths.state_dir())
+
     def forward(data: bytes):
-        return forward_query(data, resolvers=config.upstreams)
+        # Under an engaged tunnel the profile's DNS servers are
+        # the upstream set (tunnel_upstreams); the queries reach
+        # them through the tunnel because the tunnel owns the
+        # routes for the traffic it covers. Upstream failure keeps
+        # FILTER-SPEC semantics — the forwarder exhausts its chain
+        # (connected socket, one fallback, TCP completion) within
+        # its bounded budget and the query goes unanswered; the
+        # asker retries. Nothing is swallowed beyond that.
+        return forward_query(
+            data, resolvers=tunnel_upstreams(tunnel_store, config.upstreams)
+        )
+
+    def filtering_on() -> bool:
+        session = tunnel_session(tunnel_store)
+        return session is None or session.get("mode") != "vpn"
 
     engine = FilterEngine(
         lists_provider=live.get,
         forwarder=forward,
         log_enabled=config.log_queries,
+        filter_enabled=filtering_on,
+        on_error=lambda exc: _say(
+            f"a query could not be handled ({exc}); that one query "
+            "was dropped and the fact is recorded here — the filter "
+            "itself keeps running."
+        ),
     )
     server = DnsFilterServer(engine, port=paths.dns_port())
     try:
@@ -265,6 +331,7 @@ def run() -> int:
 
     def stats() -> dict:
         current = live.current()
+        session = tunnel_session(tunnel_store)
         return {
             "version": __version__,
             "blocked": engine.blocked_count,
@@ -275,7 +342,13 @@ def run() -> int:
             "bound": [f"{host}:{port}" for host, port in server.bound_addresses],
             "uptime_s": int(time.monotonic() - started),
             "queries_logged": len(engine.query_log),
-            "upstreams": list(config.upstreams),
+            "upstreams": tunnel_upstreams(tunnel_store, config.upstreams),
+            # The tunnel facts status reports (mode, profile) —
+            # display state read from the guard's record. Whether
+            # the tunnel is *connected* is the guard's proof (a
+            # fresh handshake), never this record alone.
+            "tunnel_mode": (session or {}).get("mode", ""),
+            "tunnel_profile": (session or {}).get("profile", ""),
         }
 
     control = ControlServer(
