@@ -7,9 +7,11 @@ Argus precedent: one repo, several platform editions, one brain. Every
 edition implements the shared rules in [FILTER-SPEC.md](FILTER-SPEC.md):
 DNS queries are matched against a blocklist, blocked names get a
 sinkhole answer, allowed queries are forwarded to an upstream resolver.
-No root/admin tricks beyond what each platform normally requires, no
-remote VPN server, and filtering always happens on the user's own
-device.
+No root/admin tricks beyond what each platform normally requires; in
+blocker mode there is no remote VPN server, and filtering always
+happens on the user's own device. VPN mode is the separate,
+user-chosen exception governed by [TUNNEL-SPEC.md](TUNNEL-SPEC.md)
+and recorded in its own section below.
 
 Editions in build order: **Android** first, then **Windows**, then
 **Debian/Linux**, then further platforms as feasible.
@@ -451,10 +453,83 @@ Starts after the Windows edition lands.
   proofs above remain release-gate work, alongside this
   phase's own independent audit.
 
+## VPN mode — TUNNEL-SPEC Phases 1–2 (landed on `main`, unreleased)
+
+A real VPN mode beside the blocker, governed by the shared rules
+in [TUNNEL-SPEC.md](TUNNEL-SPEC.md). Blocker mode is unchanged —
+local, DNS-only, nothing leaves the device for filtering. VPN
+mode is a separate, user-chosen mode: traffic passes through the
+server the user chooses, Sphinx ships no servers, the server
+list starts empty, profiles are the user's own or their
+provider's, and the `server/` package in this repo lets anyone
+run their own endpoint. Landed on `main` after v1.0.1
+(2026-10-23); **in no release** — the current release remains
+v1.0.1, and the program audit is recorded in docs/AUDITS.md.
+
+### VPN Phase 1 — WireGuard (landed)
+
+- **The four-mode model in every edition:** Off, Blocker, VPN
+  only, VPN + Blocker, with the spec's disclosure where the
+  mode is offered, hostname endpoints resolved and pinned
+  before the tunnel engages, and a kill switch whose level is
+  stated per edition in its README.
+- **Per edition:** Android runs WireGuard through the official
+  tunnel library; Windows embeds WireGuardNT unmodified under
+  its Prebuilt Binaries License (hash-pinned in the suite);
+  Debian drives the kernel's WireGuard through the invoked
+  `wireguard-tools`. The shared profile corpus
+  (`docs/tunnel-corpus.json`) and the named owner-criterion
+  conformance test (an unlisted name resolves and its traffic
+  passes) exist in every edition.
+- **The `server/` package (landed):** install / add-client /
+  remove-client scripts that turn a stock Debian VPS into the
+  user's own WireGuard endpoint — the operator is whoever runs
+  it, never Sentinel Safeguard.
+
+### VPN Phase 2 — OpenVPN + public volunteer servers (landed)
+
+- **OpenVPN:** profiles connect on Debian and Windows through
+  the system OpenVPN program those editions invoke (GPL,
+  invoked only — never bundled). On Android there is no system
+  binary and the embeddable engines are GPLv3/AGPLv3 against
+  Sphinx's MIT license, so the Android edition shows the
+  directory and saves OpenVPN profiles but refuses OpenVPN
+  connections with that license reason named.
+- **Public volunteer servers (VPN Gate):** an opt-in directory
+  in all three editions, fetched at use time, with the
+  strangers/logging disclosure traveling with it. Debian and
+  Windows connect its nodes via the system OpenVPN; Android
+  saves them and refuses the connection, as above.
+- **VPN + Blocker, honestly per edition:** Windows and Debian
+  filter DNS through the tunnel. Android does not yet — the
+  tunnel library owns the TUN, the gate logic is built and
+  tested, the in-tunnel wiring is future work, and the app
+  discloses the limit in place.
+- **Proofs so far are CI's:** the Debian suite at 223 with both
+  network-namespace tunnel proofs (WireGuard and OpenVPN),
+  Windows CI green, and Android CI green at HEAD. The
+  same-domain ad limit (YouTube) is unchanged by VPN mode.
+
+### VPN mode — what remains (not landed)
+
+- **A release decision.** VPN mode ships in no release until
+  one is made; v1.0.1 contains none of it.
+- **The three real-machine passes, now including VPN** —
+  Android phone, Windows machine, Debian machine — with real
+  connects and real kill-switch drops. CI carries the tunnel
+  proofs until then.
+- **The Android in-tunnel filtering decision** — whether and
+  how DNS filtering is wired into the tunnel packet path on
+  Android. The gap is disclosed in the app; the decision is
+  the owner's, pending.
+- **A live-server deploy** of the `server/` package, as a
+  separate coordinated step — not part of landing the code.
+
 ## Further platforms
 
 As feasible after the three editions above, and only where the same
-honesty rules hold (names, not content; nothing leaves the device).
+honesty rules hold (names, not content; in blocker mode, nothing
+leaves the device).
 
 ---
 
@@ -467,6 +542,11 @@ honesty rules hold (names, not content; nothing leaves the device).
   edition ships before its audit gate passes.
 - Published checksums (SHA256SUMS) alongside every release, verified by
   re-download.
+- **VPN mode is behind this gate too.** It landed on `main`
+  unreleased (Phases 1–2, above); shipping it needs the release
+  decision, the three real-machine passes including VPN, the
+  Android in-tunnel filtering decision, and a live-server
+  deploy as a separate coordinated step.
 
 - **v1.0.0 — PUBLISHED 2026-10-23.** First public release:
   https://github.com/TheRealJesusTheHacker/Sphinx/releases/tag/v1.0.0

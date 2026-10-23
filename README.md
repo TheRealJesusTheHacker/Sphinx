@@ -12,22 +12,92 @@ READMEs, linked under *Editions* below.)
 ## How it works
 
 Android only lets an app filter the whole phone's traffic one way: through
-the VPN interface. Sphinx uses that interface **locally**. It opens the
-VPN slot on your phone, looks at the address lookups (DNS requests) your
-apps make, and refuses to answer the ones that point at known ad and
+the VPN interface. In blocker mode, Sphinx uses that interface
+**locally**. It opens the VPN slot on your phone, looks at the
+address lookups (DNS requests) your apps make, and refuses to
+answer the ones that point at known ad and
 tracker servers. Everything else is passed straight through to a public
 resolver and the answer comes right back.
 
-- **No remote VPN server.** There is no tunnel to us, or to anyone. Your
+- **No remote VPN server — in blocker mode.** In blocker mode there is
+  no tunnel to us, or to anyone. Your
   traffic never leaves your phone for filtering — the "VPN" is a doorway
   inside your own device, and Sphinx is standing in it asking questions.
+  (Sphinx also has a separate, user-chosen VPN mode, described below;
+  nothing in this section describes that mode.)
 - **No root.** Sphinx uses only the VPN permission Android offers to any
   app. You approve it once, in the standard Android prompt.
 - **System-wide.** Because it works at the network layer, it covers apps
   and browsers alike — not just one browser.
 - **Free.** No accounts, no subscription, no ads of our own.
 
+## VPN mode — a separate mode you choose (on `main`, not yet in a release)
+
+Blocker mode, above, is unchanged: it is local, DNS-only, and nothing
+leaves the device for filtering. Sphinx also has a **VPN mode** — a
+real tunnel, and a separate mode you choose, never a change to what
+blocker mode does. VPN mode exists on `main` in all three editions
+(2026-10-23); it is in **no release**. The current release remains
+v1.0.1 (Windows 0.3.1 and Debian 0.2.1; no APK). The shared rules are
+in [docs/TUNNEL-SPEC.md](docs/TUNNEL-SPEC.md).
+
+- **The disclosure, plainly.** In VPN mode, your traffic passes
+  through the server you choose — that's how a VPN works. Choosing a
+  server is trusting its operator with your traffic. A VPN changes
+  the address the world sees; it does not make you anonymous.
+- **Sphinx ships no servers.** The server list starts empty.
+  Profiles are your own server's, your employer's, or your
+  provider's — a server you added or one your provider gave you.
+  The [server/](server/README.md) package in this repo lets anyone
+  run their own endpoint; it does not make Sentinel Safeguard the
+  operator of anything.
+- **WireGuard and OpenVPN.** All three editions take WireGuard
+  profiles. On Windows and Debian, OpenVPN profiles also connect,
+  through the system OpenVPN program those editions invoke. On
+  Android there is no system OpenVPN program, and the embeddable
+  OpenVPN engines carry GPLv3/AGPLv3 terms against Sphinx's MIT
+  license — so the Android edition shows the directory and saves
+  OpenVPN profiles, but **refuses OpenVPN connections and names
+  that license reason** when it does.
+- **Public volunteer servers (VPN Gate).** All three editions
+  offer an opt-in directory of public volunteer servers from
+  VPN Gate, a research project at the University of Tsukuba. These
+  are strangers' machines: the operator can see your traffic, and
+  VPN Gate states its servers keep connection logs for three
+  months or more. The directory is off until you open it, and the
+  disclosure travels with it in every edition. On Android the
+  directory's OpenVPN profiles can be saved but not connected,
+  for the license reason above.
+- **VPN + ad blocking — the honest difference between editions.**
+  On Windows and Debian, VPN + Blocker filtering runs through the
+  tunnel: DNS queries pass the filter on their way through. On
+  Android it does **not** yet: the official WireGuard tunnel
+  library owns the TUN interface, so in VPN + ad-blocking mode the
+  tunnel runs but ad blocking does not filter DNS inside the
+  tunnel — lookups go to your server's resolvers through the
+  tunnel, unfiltered, exactly as in VPN only. The gate logic is
+  built and tested; wiring it into the tunnel packet path is
+  future work, and the app states this limit in place.
+- **The same-domain limit is unchanged by VPN mode.** A tunnel
+  changes where traffic exits; it does not change what a name
+  lookup can separate. YouTube's ads still come from YouTube's
+  servers, tunnel or no tunnel.
+- **Kill switch.** Each edition has a kill switch, and the level
+  differs by edition and by protocol — on both desktops the
+  OpenVPN kill-switch level is below WireGuard's, stated plainly
+  in the edition READMEs. Read the edition's own account before
+  relying on it: [windows/README.md](windows/README.md) and
+  [debian/README.md](debian/README.md); the Android edition's is
+  stated in the app, where the mode is offered.
+- **Not yet proven on real hardware.** The tunnel proofs so far
+  are CI's. The real-machine passes — now including VPN on real
+  hardware — are still owed, for VPN mode as for the blocker.
+
 ## Your lists, your log — the privacy facts
+
+These facts describe the blocker/filter path. Where a fact is
+about filtering, it is a blocker-mode fact; VPN mode's own facts
+are the section above.
 
 - **A real blocklist, built in.** Sphinx ships with the StevenBlack
   unified list (ads + malware) — **71,491 domains** — so it protects
@@ -35,9 +105,12 @@ resolver and the answer comes right back.
 - **Updates only when you tap.** "Update lists now" downloads fresh
   lists over HTTPS from the sources shown in the app (defaults:
   StevenBlack and HaGeZi Multi LIGHT). You can see and edit those
-  addresses. Sphinx contacts nothing else on its own behalf — the only
+  addresses. On the blocker path, Sphinx contacts nothing else on
+  its own behalf — the only
   other traffic is your own allowed lookups going to the public
-  resolver, as they would without Sphinx. A download that fails or
+  resolver, as they would without Sphinx. (In VPN mode, by your
+  choice, your traffic goes through the server you picked — see
+  the VPN mode section above.) A download that fails or
   doesn't parse as a real list changes **nothing**: your working list
   is never wiped by a bad download.
 - **An allowlist that always wins.** If a site or app breaks, add its
@@ -57,7 +130,7 @@ resolver and the answer comes right back.
   Sphinx counts the packets it drops, per app — memory only, under
   the same rules as the query log below: never written to permanent
   storage by the filter, never sent anywhere.
-- **A query log that stays on the phone.** So you can see Sphinx
+- **A query log that stays on the phone (blocker path).** So you can see Sphinx
   working, it keeps the most recent 500 lookups — the name, whether it
   was blocked, and the time — **in memory only**. The log is never
   written to permanent storage, never sent anywhere, and disappears
@@ -93,7 +166,7 @@ resolver and the answer comes right back.
   the ads and the music come from the same servers, so at the network
   layer they look identical. Blocking the ad would block the song. No
   DNS or network blocker can honestly promise otherwise, and we won't.
-- **It does not inspect your traffic.** Sphinx reads DNS requests —
+- **It does not inspect your traffic.** In blocker mode Sphinx reads DNS requests —
   the names being looked up — and nothing else. It does not open,
   decrypt, or read the contents of your HTTPS connections.
 - **The Android edition currently filters IPv4 DNS.** IPv6 filtering is
@@ -124,10 +197,17 @@ resolver and the answer comes right back.
 Sphinx is one product with multiple editions in this repo, all built on
 the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md)):
 
-1. **Android** — the app described above (local VPN mode).
+1. **Android** — the app described above (local blocker mode;
+   VPN mode uses the same VPN slot for a real tunnel to your
+   server — see the VPN mode section above).
    *Feature-complete and audited; not yet in a release — a public
    APK must be signed with the owner's release keystore, which
-   does not exist yet (see Status below).*
+   does not exist yet (see Status below). VPN mode Phases 1–2
+   landed on `main` after v1.0.1 (2026-10-23), unreleased:
+   WireGuard through the official tunnel library, the VPN Gate
+   directory with OpenVPN connections refused with the license
+   reason named, and the in-tunnel filtering limit stated in
+   the VPN mode section.*
 2. **Windows (SPHINX.EXE)** — a local DNS filter listening on loopback
    (127.0.0.1 and ::1) that the system DNS is pointed at while it
    runs, under a save-first / restore-exactly discipline for the
@@ -139,7 +219,10 @@ the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md
    settings before it removes anything. *Current release v0.3.1 in
    v1.0.1 (2026-10-23; first shipped as v0.3.0 in v1.0.0) — Phases 1–3 (core filter service; tray
    host, start-at-sign-in, installer; profiles and the Sphinx
-   palette); see [windows/README.md](windows/README.md).*
+   palette). VPN mode Phases 1–2 landed on `main` after v1.0.1,
+   unreleased (WireGuard, plus OpenVPN through your own installed
+   OpenVPN program, and the VPN Gate directory); see
+   [windows/README.md](windows/README.md).*
 3. **Debian/Linux** — a local DNS-filter daemon (systemd service)
    listening on loopback, shipped as a .deb, with engage/restore
    commands under the same restore discipline (a plain
@@ -147,7 +230,10 @@ the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md
    systemd-resolved runtime override restored by revert — never a
    pinned DHCP lease). *Current release 0.2.1 in v1.0.1 (2026-10-23; first
    shipped as 0.2.0 in v1.0.0) — Phases 1–2 (daemon, guard, CLI, .deb; manual list updates,
-   rule stores, profiles, and boot/route-change resumption) — see
+   rule stores, profiles, and boot/route-change resumption).
+   VPN mode Phases 1–2 landed on `main` after v1.0.1, unreleased
+   (WireGuard, plus OpenVPN through the system OpenVPN, and the
+   VPN Gate directory) — see
    [debian/README.md](debian/README.md).*
 4. Further platforms as feasible after those three.
 
@@ -155,6 +241,9 @@ All three editions exist today. The Windows and Debian editions
 are released (current release v1.0.1, 2026-10-23); the Android edition is
 feature-complete and audited but not yet in a release, for the
 signing-key reason stated plainly in the Status section below.
+VPN mode exists on `main` in all three editions (2026-10-23) and
+is in no release — no edition's release should be read as
+containing it.
 
 ## Status
 
@@ -200,6 +289,14 @@ Debian parity fixes (the liveness-proof timeout and the atomic-
 write durability fixes, carried to the Debian edition) — were
 **not** in v1.0.0. They shipped in **v1.0.1** (2026-10-23),
 the current release.
+
+**VPN mode landed on `main` after v1.0.1 (2026-10-23) and is
+not in any release.** TUNNEL-SPEC, the `server/` package, and
+VPN Phases 1–2 in all three editions are on `main` only; the
+current release above contains none of it. A release decision
+for VPN mode has not been made, and the real-machine passes
+named above now include VPN on real hardware among what is
+still owed.
 
 ## Building
 

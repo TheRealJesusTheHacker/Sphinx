@@ -8,6 +8,152 @@ never merely to make a report prettier).
 
 ---
 
+## VPN program audit — TUNNEL-SPEC, server package, and VPN mode in all three editions (2026-10-23)
+
+Scope: the VPN program as landed on `main` at HEAD
+`921aa75556eb` — the shared spec (`docs/TUNNEL-SPEC.md`) and its
+canonical profile corpus (`docs/tunnel-corpus.json`), the
+`server/` package (a WireGuard endpoint anyone can run on their
+own Debian VPS), and VPN mode in all three editions: Debian
+Phases 1–2, Windows Phases 1–2, and Android Phases 1–2. Each
+edition's README carries its own VPN section; this entry is the
+program-level record. VPN mode is on `main` only — it is in no
+release. The current release remains v1.0.1 (Windows 0.3.1 +
+Debian 0.2.1; no APK), and nothing in this entry should be read
+as putting VPN mode in it.
+
+### Phases
+
+- **Phase 1 — WireGuard.** The four-mode model (Off, Blocker,
+  VPN only, VPN + Blocker), server profiles that start from an
+  empty list, the spec's disclosure where the mode is offered,
+  resolve-and-pin of hostname endpoints before the tunnel
+  engages, and a kill switch, in every edition. Android runs
+  WireGuard through the official tunnel library; Windows embeds
+  WireGuardNT (below); Debian drives the kernel's WireGuard
+  through the system `wireguard-tools`.
+- **Phase 2 — OpenVPN and the public directory.** OpenVPN
+  connections on Debian and Windows, through the system OpenVPN
+  program those editions invoke, and the VPN Gate public
+  volunteer servers directory — opt-in, fetched at use time,
+  with the strangers/logging disclosure — in all three
+  editions. Android shows the directory and saves its profiles
+  but refuses OpenVPN connections, for the license reason in
+  the ledger below.
+
+### Decisive proofs
+
+- **Debian:** CI suite 201 → 223 passed across the VPN phases,
+  including both network-namespace tunnel proofs — a real
+  WireGuard endpoint and an OpenVPN endpoint in separate
+  namespaces, with the shipped client path connecting,
+  handshaking, and carrying traffic through each.
+- **Windows:** CI green for Phases 1–2 (315 passed / 6 skipped
+  in the local run), including the suite's pin of the bundled
+  WireGuardNT DLL by SHA-256
+  (`40add3d0b47b…` — the full hash is in
+  `windows/packaging/third-party/PROVENANCE.md`).
+- **Android:** CI green at `6db988d5e7a3` (the audit fix that
+  stopped the VPN + Blocker status claiming filtering the build
+  does not do) and at HEAD `921aa75556eb` — the suite at 139,
+  plus the Phase 2 directory tests (feed parsing over a
+  synthetic fixture in the feed's exact format, cache-with-age,
+  live/cache/empty resolution, disclosure presence, and the
+  named connect refusal, including for directory-imported
+  profiles). The live VPN Gate feed was never touched by a
+  test.
+
+### Licensing ledger
+
+- **Windows — WireGuardNT:** the prebuilt `wireguard.dll` is
+  bundled **unmodified** under WireGuard LLC's Prebuilt
+  Binaries License, shipped verbatim beside it, with source,
+  distribution hash, and DLL hash recorded in the provenance
+  file above. It is not MIT-licensed and is never represented
+  as such; Sphinx's own code remains MIT.
+- **Android — tunnel library:** the official WireGuard tunnel
+  library is Apache-2.0 and its userspace backend wireguard-go
+  is MIT; both licenses are bundled with notices in the app's
+  third-party notices.
+- **Debian and Windows — invoked only:** `wireguard-tools` and
+  `openvpn` are GPL programs executed as separate system
+  processes (Debian: `Depends: wireguard-tools`,
+  `Recommends: openvpn`; Windows: the user's own installed
+  OpenVPN). Nothing GPL is bundled, linked, or copied into
+  Sphinx on either desktop.
+- **Android — OpenVPN refused:** Android has no system OpenVPN
+  binary to invoke, and the embeddable engines are GPLv3
+  (ics-openvpn) and AGPLv3 (the OpenVPN 3 core) against
+  Sphinx's MIT license. The edition therefore parses, stores,
+  and labels OpenVPN profiles and refuses them at connect time
+  with that reason named — it does not silently ignore them
+  or half-connect.
+
+### Owner-correction conformance
+
+The owner's standing criterion (2026-10-23) — the filter
+questions names; it does not block general traffic — is a
+named test in every edition: an unlisted name resolves and its
+traffic passes with the filter on, on the blocker path and,
+where the edition implements it, on the VPN + Blocker path
+(Debian `test_tunnel_conformance.py`, the Windows tunnel
+conformance tests including the OpenVPN + Blocker path, and
+Android `TunnelBlockerConformanceTest`). A tracker-adjacent
+but unlisted name passes in each: listing is the whole test.
+
+### Findings and deviations, for the record
+
+- **Android TUNNEL + Blocker gap.** In VPN + ad-blocking mode
+  on Android, ad blocking does not yet filter DNS inside the
+  tunnel: the tunnel library owns the TUN, and wireguard-go's
+  data plane exposes no packet hook to the app. The gate logic
+  is built and JVM-tested; the in-tunnel wiring is future
+  work. The limit is disclosed in the app where the mode is
+  offered and in its status line while it runs, and the
+  `6db988d5e7a3` fix above exists because an earlier status
+  claimed more than this. Whether and how to close the gap is
+  the owner's call, pending. Windows and Debian VPN + Blocker
+  do filter through the tunnel; the editions are not the same
+  here and the copy does not blur it.
+- **OpenVPN kill-switch level is below WireGuard's on both
+  desktops.** WireGuard's routes are Sphinx-managed, so a dead
+  WireGuard tunnel blackholes covered traffic. OpenVPN owns
+  its routes and removes them as it dies, so neither desktop
+  edition can blackhole general traffic after an unexpected
+  OpenVPN exit; what they guarantee instead (DNS never silently
+  re-pointed, the state announced with its two choices) is
+  stated in each edition's README. No README claims the
+  WireGuard guarantee for OpenVPN.
+- **Debian Phase 2 report tally.** The Debian worker's local
+  tally in its Phase 2 report was miscounted; CI and a
+  coordinator re-run reconciled the suite at **223 passed**,
+  which is the figure this entry records. The code was not in
+  question — the count was.
+
+### Unproven
+
+- The three real-machine passes (Android phone, Windows
+  machine, Debian machine) — now including VPN mode on real
+  hardware: a real WireGuard/OpenVPN connect, kill-switch
+  behavior on a real drop, and a real-server session.
+- A live-server deployment of the `server/` package against
+  the shipped clients, end to end. The package's own tests and
+  CI's namespace endpoints are not a deployed server.
+- Android in-tunnel DNS filtering (the gap above) — unbuilt,
+  not merely unproven.
+
+### Verdict
+
+The program is what the spec claims, at CI strength: a
+separate, user-chosen VPN mode beside an unchanged blocker,
+an empty-start profile list, no Sphinx-operated servers, and
+the per-edition limits stated where a user will see them. It
+is landed on `main` and unreleased; the release decision and
+the real-machine proofs are the gate in front of it, recorded
+in docs/ROADMAP.md.
+
+---
+
 ## Fleet Sweep #4 — Debian parity with the W-fix wave + supply-chain pinning (2026-10-23)
 
 Scope: the whole repo (all three editions) re-audited against
