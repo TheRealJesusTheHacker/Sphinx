@@ -27,6 +27,7 @@ does not actually carry traffic. Run as root on the CI runner:
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import sys
 import tempfile
