@@ -53,12 +53,15 @@ class ListUpdater(private val store: ListStore) {
                 bytes == null -> {
                     val kept = keepExisting(source, union)
                     outcomes += SourceOutcome(source, false, kept,
-                        "download failed — kept the previous copy")
+                        failureNote("download failed", store.savedFile(source) != null))
                 }
                 parsed == null -> {
                     val kept = keepExisting(source, union)
                     outcomes += SourceOutcome(source, false, kept,
-                        "download didn't parse as a blocklist — kept the previous copy")
+                        failureNote(
+                            "download didn't parse as a blocklist",
+                            store.savedFile(source) != null,
+                        ))
                 }
                 else -> {
                     stagedBytes[source] = bytes
@@ -156,6 +159,20 @@ class ListUpdater(private val store: ListStore) {
     private fun ByteArray.decodeToString(): String = toString(Charsets.UTF_8)
 
     companion object {
+        /**
+         * The per-source failure note for [Result.outcomes]. It may
+         * claim a previous copy was kept only when one is actually
+         * saved: for a source that has never downloaded successfully
+         * there is nothing to keep, and a note saying otherwise
+         * would report protection the phone does not have.
+         */
+        internal fun failureNote(reason: String, hasPreviousCopy: Boolean): String =
+            if (hasPreviousCopy) {
+                "$reason — kept the previous copy"
+            } else {
+                "$reason — no previous copy is saved"
+            }
+
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 30_000
         private const val MAX_LIST_BYTES = 32 * 1024 * 1024
