@@ -300,11 +300,13 @@ debian/
 
 ## Status
 
-Debian Phase 2, version **0.2.0**. The suite and the package build
-run locally and in CI (`.github/workflows/sphinx-debian.yml`).
+Debian Phase 2, version **0.2.0** — shipped in Sphinx **v1.0.0
+(2026-10-23)**. The suite and the package build run locally and
+in CI (`.github/workflows/sphinx-debian.yml`).
 
-**Not yet proven on a real machine** — this phase was built and
+**Not yet proven on a real machine** — this edition was built and
 tested on fakes and a build VM, and no real machine's DNS has been
 touched by it. The end-to-end pass on real Debian hardware —
-engage, reboot behavior, restore, an install/remove cycle — is
-release-gate work, owed before this edition is called done.
+engage, reboot behavior, restore, an install/remove cycle — was
+named in the v1.0.0 release notes as still owed; the release
+shipped with that stated plainly rather than waiting on it.
