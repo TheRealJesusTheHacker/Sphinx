@@ -17,13 +17,16 @@ snapshots of your allowlist and your own block entries — and
 restyles the window and tray in Sphinx's own palette (basalt,
 sandstone, bronze-gold). What does *not* exist yet: a background
 Windows *service* (Phase 2's host is a tray process — the section
-below says why, plainly). This edition shipped as **v0.3.0 in
-Sphinx v1.0.0 (2026-10-23)**, after the release gate in the
-roadmap (independent audit → fix → re-audit, CI builds on the
-released commit, published checksums verified by re-download).
-The real-machine install → engage → uninstall pass named in the
-release notes is still owed — v1.0.0 shipped with that stated
-plainly, and this README won't pretend otherwise.
+below says why, plainly). This edition first shipped as **v0.3.0 in
+Sphinx v1.0.0 (2026-10-23)**; the current release is **v0.3.1
+in Sphinx v1.0.1 (2026-10-23)**, carrying the W-1–W-7
+restore-discipline fixes and the R-17 installer branding. Both
+releases passed the release gate in the roadmap (independent
+audit → fix → re-audit, CI builds on the released commit,
+published checksums verified by re-download). The real-machine
+install → engage → uninstall pass named in the release notes
+is still owed — v1.0.1 states that just as plainly, and this
+README won't pretend otherwise.
 
 ## How it works
 
