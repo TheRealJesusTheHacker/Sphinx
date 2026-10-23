@@ -137,6 +137,21 @@
     <string name="vpn_notices_title">Bundled components — licenses</string>
     <string name="status_tunnel_tile">VPN on</string>
 
+    <!-- Public volunteer servers — VPN Gate directory (Phase 2, TUNNEL-SPEC) -->
+    <string name="section_vpngate">Public volunteer servers</string>
+    <string name="vpngate_intro">A separate list, not your servers: public volunteer servers published by VPN Gate, a research project at the University of Tsukuba. These are not Sentinel\'s servers and not Sphinx servers. This section is off until you open it, and the list is fetched fresh when you do — nothing is bundled.</string>
+    <string name="button_vpngate_open">Show public volunteer servers…</string>
+    <string name="vpngate_disclosure">These are strangers\' machines, volunteered to a research project (VPN Gate, University of Tsukuba). The operator can see your traffic. VPN Gate states its servers keep connection logs — your real address, the times, the server you used — for three months or more. Fine for appearing to be somewhere else; not for anything sensitive.</string>
+    <string name="button_vpngate_refresh">Fetch the list again</string>
+    <string name="vpngate_fetching">Fetching the public server list…</string>
+    <string name="vpngate_live_note">Live list from VPN Gate, fetched just now.</string>
+    <string name="vpngate_cache_note">Showing the last fetched list — %1$s. It is not live.</string>
+    <string name="vpngate_empty_state">Couldn\'t fetch the public server list — check your connection. Nothing is bundled; there is no offline list.</string>
+    <string name="vpngate_row_meta">Feed score: %1$s · Feed ping: %2$s — VPN Gate\'s numbers as its feed states them, not Sphinx measurements.</string>
+    <string name="button_vpngate_save">Save this server</string>
+    <string name="vpngate_saved">Saved to your server list above, as an OpenVPN profile from VPN Gate.</string>
+    <string name="vpngate_source_line">Source: VPN Gate — a public volunteer server (vpngate).</string>
+
     <!-- Query log (Phase 2) -->
     <string name="section_log">Query log</string>
     <string name="log_explainer">The most recent lookups Sphinx questioned — kept only in memory on this phone, never sent anywhere, and gone when the app\'s process stops. Recording is on by default so you can see Sphinx working; turn it off any time.</string>

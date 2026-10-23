@@ -571,6 +571,68 @@
             android:layout_marginTop="8dp"
             android:text="@string/button_vpn_notices" />
 
+        <!-- Public volunteer servers — VPN Gate directory (Phase 2).
+             Opt-in: never pre-enabled; the section opens on purpose
+             and the feed is fetched at that moment, never before. -->
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="32dp"
+            android:text="@string/section_vpngate"
+            android:textColor="@color/sphinx_bronze_soft"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/vpngate_intro"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/vpnGateOpenButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/button_vpngate_open" />
+
+        <LinearLayout
+            android:id="@+id/vpnGateContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/vpngate_disclosure"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/vpnGateRefreshButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/button_vpngate_refresh" />
+
+            <TextView
+                android:id="@+id/vpnGateStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textSize="14sp" />
+
+            <LinearLayout
+                android:id="@+id/vpnGateRows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </LinearLayout>
+
         <!-- Query log (Phase 2) -->
 
         <TextView

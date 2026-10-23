@@ -34,10 +34,13 @@ import com.sentinelsafeguard.sphinx.core.SphinxMode
 import com.sentinelsafeguard.sphinx.core.TunnelParseResult
 import com.sentinelsafeguard.sphinx.core.TunnelProfileParser
 import com.sentinelsafeguard.sphinx.core.TunnelQr
+import com.sentinelsafeguard.sphinx.core.VpnGate
 import com.sentinelsafeguard.sphinx.core.WgProfile
 import com.sentinelsafeguard.sphinx.lists.ListStore
 import com.sentinelsafeguard.sphinx.lists.TunnelStore
 import com.sentinelsafeguard.sphinx.lists.ListUpdater
+import com.sentinelsafeguard.sphinx.lists.VpnGateFetcher
+import com.sentinelsafeguard.sphinx.lists.VpnGateStore
 import com.sentinelsafeguard.sphinx.vpn.SphinxVpnService
 import java.net.URI
 import java.text.NumberFormat
@@ -108,6 +111,12 @@ class MainActivity : Activity() {
     private lateinit var tunnelStore: TunnelStore
     private var pendingTunnelBlocker: Boolean = false
 
+    private lateinit var vpnGateStore: VpnGateStore
+    private lateinit var vpnGateContainer: LinearLayout
+    private lateinit var vpnGateStatusText: TextView
+    private lateinit var vpnGateRows: LinearLayout
+    private var vpnGateOpened: Boolean = false
+
     private lateinit var store: ListStore
     private val handler = Handler(Looper.getMainLooper())
 
@@ -126,6 +135,7 @@ class MainActivity : Activity() {
         setContentView(R.layout.activity_main)
         store = ListStore(this)
         tunnelStore = TunnelStore(this)
+        vpnGateStore = VpnGateStore(this)
 
         statusText = findViewById(R.id.statusText)
         blockedText = findViewById(R.id.blockedText)
@@ -240,6 +250,22 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.tunnelExcludeButton).setOnClickListener { onTunnelExclude() }
         findViewById<Button>(R.id.tunnelAlwaysOnButton).setOnClickListener { openVpnSettings() }
         findViewById<Button>(R.id.tunnelNoticesButton).setOnClickListener { showTunnelNotices() }
+        vpnGateContainer = findViewById(R.id.vpnGateContainer)
+        vpnGateStatusText = findViewById(R.id.vpnGateStatusText)
+        vpnGateRows = findViewById(R.id.vpnGateRows)
+        findViewById<Button>(R.id.vpnGateOpenButton).setOnClickListener {
+            // The opt-in moment: the section is never pre-enabled.
+            // Opening it on purpose is what fetches the feed —
+            // at use time, never in the background.
+            vpnGateContainer.visibility = View.VISIBLE
+            if (!vpnGateOpened) {
+                vpnGateOpened = true
+                fetchVpnGateDirectory()
+            }
+        }
+        findViewById<Button>(R.id.vpnGateRefreshButton).setOnClickListener {
+            fetchVpnGateDirectory()
+        }
         tunnelStatusText = findViewById(R.id.tunnelStatusText)
         tunnelProfilesSpinner = findViewById(R.id.tunnelProfilesSpinner)
         tunnelScopeText = findViewById(R.id.tunnelScopeText)
@@ -700,8 +726,17 @@ class MainActivity : Activity() {
                     dnsLine,
                 ) + errorLines).joinToString("\n")
             }
-            profile is OvpnProfile ->
-                (listOf(getString(R.string.vpn_openvpn_note)) + errorLines).joinToString("\n")
+            profile is OvpnProfile -> {
+                val lines = ArrayList<String>()
+                lines.add(getString(R.string.vpn_openvpn_note))
+                if (name != null &&
+                    tunnelStore.profileSource(name) == VpnGate.SOURCE_VPNGATE
+                ) {
+                    lines.add(getString(R.string.vpngate_source_line))
+                }
+                lines.addAll(errorLines)
+                lines.joinToString("\n")
+            }
             else ->
                 (listOf(getString(R.string.vpn_profiles_empty)) + errorLines).joinToString("\n")
         }
@@ -744,6 +779,75 @@ class MainActivity : Activity() {
         }
     }
 
+    // --- Public volunteer servers (VPN Gate directory, Phase 2) -----
+    //
+    // The feed is fetched fresh at use time (HTTPS, size-capped,
+    // timeout-bounded — lists/VpnGateFetcher), off the main
+    // thread. The last good fetch is cached with its fetch time;
+    // a stale cache is shown labeled with its age, never as
+    // live; a dead feed with no cache is the honest empty state.
+    // Saving a row goes through TunnelStore's ordinary OpenVPN
+    // import path with the source recorded (vpngate).
+
+    private fun fetchVpnGateDirectory() {
+        vpnGateStatusText.text = getString(R.string.vpngate_fetching)
+        vpnGateRows.removeAllViews()
+        Thread({
+            val cached = vpnGateStore.loadCache()
+            val feedText = VpnGateFetcher.fetchFeedText()
+            val result = VpnGate.resolveDirectory(feedText, cached)
+            if (result is VpnGate.DirectoryResult.Live && feedText != null) {
+                vpnGateStore.saveCache(feedText, System.currentTimeMillis())
+            }
+            handler.post { renderVpnGateDirectory(result) }
+        }, "sphinx-vpngate-fetch").start()
+    }
+
+    private fun renderVpnGateDirectory(result: VpnGate.DirectoryResult) {
+        val rows: List<VpnGate.Row> = when (result) {
+            is VpnGate.DirectoryResult.Live -> {
+                vpnGateStatusText.text = getString(R.string.vpngate_live_note)
+                result.rows
+            }
+            is VpnGate.DirectoryResult.FromCache -> {
+                vpnGateStatusText.text = getString(
+                    R.string.vpngate_cache_note,
+                    result.cache.ageLabel(System.currentTimeMillis()),
+                )
+                result.cache.rows
+            }
+            is VpnGate.DirectoryResult.Empty -> {
+                vpnGateStatusText.text = getString(R.string.vpngate_empty_state)
+                emptyList()
+            }
+        }
+        vpnGateRows.removeAllViews()
+        for (row in rows) {
+            val label = TextView(this)
+            label.text = row.label
+            label.textSize = 15f
+            label.setTypeface(label.typeface, android.graphics.Typeface.BOLD)
+            vpnGateRows.addView(label)
+            val meta = TextView(this)
+            meta.text = getString(R.string.vpngate_row_meta, row.score, row.ping)
+            meta.textSize = 13f
+            vpnGateRows.addView(meta)
+            val save = Button(this)
+            save.text = getString(R.string.button_vpngate_save)
+            save.setOnClickListener {
+                when (val imported = tunnelStore.importVpnGateProfile(row)) {
+                    is TunnelParseResult.Valid -> {
+                        toast(getString(R.string.vpngate_saved))
+                        refreshTunnelView()
+                    }
+                    is TunnelParseResult.Refused ->
+                        toast(getString(R.string.vpn_import_failed, imported.reason))
+                }
+            }
+            vpnGateRows.addView(save)
+        }
+    }
+
     private fun onTunnelImportPaste() {
         val text = tunnelPasteEdit.text.toString()
         if (text.isBlank()) {
@@ -761,9 +865,16 @@ class MainActivity : Activity() {
         }
         val profile = tunnelStore.profile(name)
         if (profile is OvpnProfile) {
+            // Refused, with the reason named — never a silent
+            // failure, never a dead button. For a directory
+            // profile the VPN Gate disclosure rides again in
+            // front of the refusal (TUNNEL-SPEC, point of use).
+            val message = VpnGate.connectAttemptText(
+                profile, tunnelStore.profileSource(name)
+            ) ?: TunnelProfileParser.OPENVPN_CONNECT_REFUSAL
             AlertDialog.Builder(this)
                 .setTitle(name)
-                .setMessage(TunnelProfileParser.OPENVPN_CONNECT_REFUSAL)
+                .setMessage(message)
                 .setPositiveButton(android.R.string.ok, null)
                 .show()
             return
