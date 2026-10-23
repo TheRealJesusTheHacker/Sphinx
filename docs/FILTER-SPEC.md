@@ -157,11 +157,37 @@ A blocked query is answered locally and never leaves the device:
 ## Forwarding behavior (allowed queries)
 
 - Allowed queries are forwarded **unchanged** to an upstream resolver
-  over UDP/53 — default **1.1.1.1**, fallback **9.9.9.9** — and the
-  upstream answer is returned to the asker unchanged.
-- Timeout: 3 seconds per upstream attempt; try the fallback once before
-  giving up. If both fail, the query goes unanswered (the asking app
-  retries on its own schedule).
+  over UDP/53, and the upstream answer is returned to the asker
+  unchanged. The upstreams form a chain, tried in order:
+  **1.1.1.1**, then **9.9.9.9**, then **the device's own DNS
+  servers** — the resolvers the platform was using before the
+  filter engaged, captured at engage time under the same
+  save-the-originals discipline the configuration editions apply
+  to DNS settings (on Android: the non-VPN networks' DNS servers,
+  read before the interface is established). The public resolvers
+  keep their place at the chain's head; the device's own servers
+  are its floor.
+- **An allowed query must never fail merely because the public
+  upstreams are unreachable on the current network** — a carrier
+  that intercepts or blocks outside resolvers, an IPv6-only path,
+  a filtered port 53. The unlisted path degrades toward the
+  network's own resolution, never toward silence: only when every
+  upstream in the chain has failed may a query go unanswered (the
+  asking app then retries on its own schedule). This rule is why
+  the chain exists, and it outranks the ordering above — an
+  edition that cannot reach its chain's head must still reach
+  its floor. (Amended 2026-10-23, after the Android SEV-1: the
+  chain had no floor, both public literals were dead ends from
+  one phone's forwarding socket, and every unlisted name failed
+  while the phone's own DNS — filter off — answered them all.)
+- Timeout: 3 seconds per upstream attempt. The resolver that last
+  answered is tried first on the next query, so a network where
+  the head of the chain is dead converges on the working resolver
+  instead of paying the dead attempts' timeouts for every name.
+- A truncated (TC) UDP answer is completed over TCP to the same
+  resolver inside the same attempt (RFC 7766); if TCP fails, the
+  truncated answer is handed back and the asker retries as it
+  sees fit.
 - A response counts as the answer only if it comes from the resolver
   the query was sent to and its DNS ID matches the query's ID with the
   response (QR) bit set. Anything else arriving on the socket is
@@ -169,6 +195,11 @@ A blocked query is answered locally and never leaves the device:
   asker as if it were the answer.
 - Upstream traffic must never be routed back into the filter itself
   (on Android: the forwarding socket is protected from the VPN).
+  The protection is a checked precondition, not an assumption:
+  if the platform refuses to protect a forwarding socket, that
+  socket is not used — an unprotected query would loop back into
+  the filter and die silently, which is the one failure this
+  design exists to prevent.
 
 ## List updates
 
