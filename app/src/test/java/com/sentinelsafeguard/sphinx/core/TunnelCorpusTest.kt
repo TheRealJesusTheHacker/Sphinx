@@ -2,6 +2,7 @@ package com.sentinelsafeguard.sphinx.core
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -205,7 +206,10 @@ class TunnelCorpusTest {
             val valid = expect["valid"] as Boolean
             when (val result = TunnelProfileParser.parse(input)) {
                 is TunnelParseResult.Refused -> {
-                    assertTrue("$id: expected valid, got refusal ${result.reason}", valid)
+                    assertFalse(
+                        "$id: expected valid, got refusal ${result.reason}",
+                        valid,
+                    )
                     assertEquals("$id refusal", expect["refusal"], result.reason)
                     assertNull("$id export", expect["export_text"])
                 }
