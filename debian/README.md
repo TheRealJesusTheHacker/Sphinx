@@ -67,7 +67,7 @@ Build the package from a checkout of this repository:
 
 ```sh
 sh debian/packaging/build-deb.sh        # writes debian/dist/
-sudo apt install ./debian/dist/sphinx_0.2.0_all.deb
+sudo apt install ./debian/dist/sphinx_0.2.1_all.deb
 ```
 
 The package is architecture `all` (pure Python, standard library
@@ -300,13 +300,14 @@ debian/
 
 ## Status
 
-Debian Phase 2, version **0.2.0** — shipped in Sphinx **v1.0.0
-(2026-10-23)**. The suite and the package build run locally and
+Debian Phase 2, version **0.2.1** — shipped in Sphinx **v1.0.1
+(2026-10-23)**, carrying the liveness-proof and atomic-write
+parity fixes; first shipped as 0.2.0 in v1.0.0 the same day. The suite and the package build run locally and
 in CI (`.github/workflows/sphinx-debian.yml`).
 
 **Not yet proven on a real machine** — this edition was built and
 tested on fakes and a build VM, and no real machine's DNS has been
 touched by it. The end-to-end pass on real Debian hardware —
 engage, reboot behavior, restore, an install/remove cycle — was
-named in the v1.0.0 release notes as still owed; the release
+named in the release notes as still owed; both releases
 shipped with that stated plainly rather than waiting on it.
