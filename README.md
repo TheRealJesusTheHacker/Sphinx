@@ -2,9 +2,12 @@
 
 **Every request gets questioned.**
 
-Sphinx is a free Android app from Sentinel Safeguard that blocks ads and
-trackers across your whole phone — in apps and in the browser, not just on
-web pages.
+Sphinx is a free ad and tracker blocker from Sentinel Safeguard, built
+in editions for Android, Windows, and Debian from this one repo. This
+README describes the Android edition in detail: it blocks ads and
+trackers across your whole phone — in apps and in the browser, not
+just on web pages. (The Windows and Debian editions have their own
+READMEs, linked under *Editions* below.)
 
 ## How it works
 
@@ -122,7 +125,9 @@ Sphinx is one product with multiple editions in this repo, all built on
 the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md)):
 
 1. **Android** — the app described above (local VPN mode).
-   *Feature-complete; release gate pending.*
+   *Feature-complete and audited; not yet in a release — a public
+   APK must be signed with the owner's release keystore, which
+   does not exist yet (see Status below).*
 2. **Windows (SPHINX.EXE)** — a local DNS filter listening on loopback
    (127.0.0.1 and ::1) that the system DNS is pointed at while it
    runs, under a save-first / restore-exactly discipline for the
@@ -131,42 +136,58 @@ the same filtering brain (the rules in [docs/FILTER-SPEC.md](docs/FILTER-SPEC.md
    start-at-sign-in that resumes protection under the same intent
    discipline as the Android edition. One-file exe, a portable
    edition, and an installer whose uninstaller restores your DNS
-   settings before it removes anything. *In build — Phases 1–3
-   (core filter service; tray host, start-at-sign-in, installer;
-   profiles and the Sphinx palette) have landed; see
-   [windows/README.md](windows/README.md).*
+   settings before it removes anything. *Shipped as v0.3.0 in
+   v1.0.0 (2026-10-23) — Phases 1–3 (core filter service; tray
+   host, start-at-sign-in, installer; profiles and the Sphinx
+   palette); see [windows/README.md](windows/README.md).*
 3. **Debian/Linux** — a local DNS-filter daemon (systemd service)
    listening on loopback, shipped as a .deb, with engage/restore
    commands under the same restore discipline (a plain
    /etc/resolv.conf rewritten byte-exactly-restorable, or a
    systemd-resolved runtime override restored by revert — never a
-   pinned DHCP lease). *Phases 1–2 landed (daemon, guard, CLI,
-   .deb; manual list updates, rule stores, profiles, and
-   boot/route-change resumption) — see
+   pinned DHCP lease). *Shipped as 0.2.0 in v1.0.0 (2026-10-23) —
+   Phases 1–2 (daemon, guard, CLI, .deb; manual list updates,
+   rule stores, profiles, and boot/route-change resumption) — see
    [debian/README.md](debian/README.md).*
 4. Further platforms as feasible after those three.
 
-All three editions exist today; none is a finished release yet.
-The others are named here so the plan is public and honest — not
-because they're ready.
+All three editions exist today. The Windows and Debian editions
+are released (v1.0.0, 2026-10-23); the Android edition is
+feature-complete and audited but not yet in a release, for the
+signing-key reason stated plainly in the Status section below.
 
 ## Status
 
-This is **Phase 4: the Android edition is feature-complete per the
-[roadmap](docs/ROADMAP.md) — and still not a finished product.**
-The DNS filter runs on a bundled 71,491-domain list, updates itself
-from public list sources when you tap the button (with a sanity
-check and an atomic swap, so a bad download can never wipe your
-protection), honors your allowlist, and keeps a short on-device
-query log. On top of that: your own custom block entries; per-app
-rules (exempt an app from filtering, or block an app outright —
-with the trade stated plainly above); per-app drop counters;
-profiles; an opt-in start on boot; and plain battery handling.
-What remains before a public release is the release gate, not
-more features: a signed release build and an independent audit of
-the whole edition — fix, then re-audit — with published checksums.
-Nothing here is a finished public release yet, and under Sentinel's
-standing rule, nothing ships before that gate passes.
+**v1.0.0 — the first public release — was published on
+2026-10-23.** It carries the Windows edition (v0.3.0) and the
+Debian edition (0.2.0), built from the audited commit, with
+published checksums verified by re-download. Its release notes
+name what is proven and what is not: the three real-machine
+passes (Android phone, Windows machine, Debian machine) are
+still owed, and until they land v1.0.0 is audited, tested
+software whose last hardware proofs are still in front of it.
+
+The **Android edition is feature-complete** per the
+[roadmap](docs/ROADMAP.md). The DNS filter runs on a bundled
+71,491-domain list, updates itself from public list sources when
+you tap the button (with a sanity check and an atomic swap, so a
+bad download can never wipe your protection), honors your
+allowlist, and keeps a short on-device query log. On top of
+that: your own custom block entries; per-app rules (exempt an
+app from filtering, or block an app outright — with the trade
+stated plainly above); per-app drop counters; profiles; an
+opt-in start on boot; and plain battery handling. The edition
+has passed the same build → audit → fix → re-audit gate as the
+shipped editions. It is **not** in v1.0.0 for one plain reason:
+a public release APK must be signed with the owner's release
+keystore, and that key does not exist yet. The Android APK joins
+a release as soon as that one owner step is done; no
+debug-signed build ships in its place.
+
+Fixes landed on `main` after the v1.0.0 commit — the
+quick-settings tile, truncated-answer completion over TCP, and
+the Windows W-1–W-7 restore-discipline fixes, among others — are
+**not** in v1.0.0. They ship in a later release.
 
 ## Building
 
