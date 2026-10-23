@@ -23,7 +23,7 @@
 ;     DNS record inside it is retired by the verified restore
 ;     above — and only by that.
 
-#define AppVersion "0.3.0"
+#define AppVersion "0.3.1"
 ; Keep AppVersion in step with sphinx_win.__version__.
 
 [Setup]
