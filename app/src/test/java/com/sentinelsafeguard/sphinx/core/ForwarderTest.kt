@@ -286,9 +286,17 @@ class ForwarderTest {
         val chain = DnsForwarder.upstreamChain(
             listOf(systemV6, loopback, InetAddress.getByName("1.1.1.1")),
         )
+        // Compared as addresses, not text: an IPv6 address's
+        // rendered form is the platform's choice (compressed or
+        // not), the chain's contents are what is being pinned.
         assertEquals(
-            listOf("1.1.1.1", "9.9.9.9", "2001:db8::53", "127.0.0.1"),
-            chain.map { it.hostAddress },
+            listOf(
+                InetAddress.getByName("1.1.1.1"),
+                InetAddress.getByName("9.9.9.9"),
+                systemV6,
+                loopback,
+            ),
+            chain,
         )
     }
 
