@@ -302,7 +302,7 @@ that spec requires, stated here where the mode is offered:
   save-first / verify / exact-restore guard discipline as
   WireGuard: the pre-tunnel state is saved and verified before
   anything changes, connected is proven (the process is alive
-  *and* its tunnel interface `sphinxovpn` is up — never claimed
+  *and* its tunnel interface `tun-sphinx` is up — never claimed
   from intent or from a record), and disconnect/prerm tear the
   tunnel down first, then restore DNS, stopping loudly when the
   tunnel cannot be brought down. `openvpn` is a **Recommends**,
@@ -322,7 +322,7 @@ that spec requires, stated here where the mode is offered:
   sanitized result is the only text that runs. Sphinx passes no
   `--script-security` flag; the posture is the *absence* of
   script hooks. Its own flags are limited to `--config`,
-  `--dev sphinxovpn`, and `--nobind`.
+  `--dev tun-sphinx`, and `--nobind`.
 - **OpenVPN DNS — pushed DNS is rejected, on purpose.** Public
   servers push DNS servers. Sphinx's one recorded behavior:
   the session config carries

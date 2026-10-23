@@ -73,7 +73,7 @@ MISSING_OPENVPN_MESSAGE = (
     "— it is a Recommends of this package, not a hard dependency, "
     "because WireGuard must work without it. Nothing was changed."
 )
-OPENVPN_INTERFACE = "sphinxovpn"
+OPENVPN_INTERFACE = "tun-sphinx"  # starts with "tun" so openvpn infers the type; --dev-type is also passed explicitly
 OPENVPN_DNS_BEHAVIOR = "pull-filter-reject-pushed-dns"
 KILLSWITCH_OPENVPN_LEVEL = (
     "OpenVPN kill-switch level: if the openvpn process exits "
@@ -638,7 +638,7 @@ class TunnelGuard:
             self._mark_leftover(record, f"could not write the tunnel config: {exc}")
             return EngageResult(False, f"The tunnel config could not be written ({exc}); nothing was connected.", name)
         argv = [self._runner.which("openvpn") or "openvpn", "--config", str(config_path),
-                "--dev", OPENVPN_INTERFACE, "--nobind"]  # --dev after --config overrides the config's dev name; its type (tun) stands
+                "--dev", OPENVPN_INTERFACE, "--dev-type", "tun", "--nobind"]  # after --config: overrides the config's dev name; type is tun on both
         pid, err = start_fn(argv, str(self._ovpn_log_path()))
         if not pid:
             self._mark_leftover(record, f"openvpn did not start: {err}")

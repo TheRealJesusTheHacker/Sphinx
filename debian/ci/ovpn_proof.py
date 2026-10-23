@@ -124,9 +124,10 @@ def main() -> int:
             'push "dhcp-option DNS 10.98.0.1"\n'
             "keepalive 10 60\ncipher AES-256-GCM\ndata-ciphers AES-256-GCM\n"
         )
+        server_log = open(work / "server.log", "wb")
         server_proc = subprocess.Popen(
             ["ip", "netns", "exec", NS, "openvpn", "--config", str(server_conf)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdout=server_log, stderr=server_log)
         helper = work / "ns_http.py"
         helper.write_text(NS_HTTP)
         # HTTP starts after the server tun exists; retry-bind loop inside Popen wrapper:
@@ -163,7 +164,16 @@ def main() -> int:
         guard = TunnelGuard(RealTunnelRunner(), store, work / "run")
         result = guard.engage(store.get("CI-Proof").profile, mode="vpn")
         print("engage:", result.message)
-        assert result.ok, f"engage refused: {result.message}"
+        if not result.ok:
+            for label, logf in (("client", work / "run" / "tunnel" / "sphinx-openvpn.log"),
+                                ("server", work / "server.log")):
+                try:
+                    tail = logf.read_text(errors="replace").splitlines()[-60:]
+                    print(f"--- {label} log tail ---")
+                    print("\n".join(tail))
+                except OSError as exc:
+                    print(f"--- {label} log unreadable: {exc}")
+            raise AssertionError(f"engage refused: {result.message}")
         print("PROOF (a): OpenVPN tunnel proven up through Sphinx's shipped path")
 
         assert not MARKER.exists(), "the config's up script RAN — sanitizer failed"
@@ -189,7 +199,7 @@ def main() -> int:
         down = guard.disengage()
         print("disconnect:", down.message)
         assert down.ok
-        assert not RealTunnelRunner().interface_exists("sphinxovpn")
+        assert not RealTunnelRunner().interface_exists("tun-sphinx")
         print("PROOF (e): tunnel down, interface gone")
         print("OPENVPN PROOF: ALL ASSERTIONS PASSED")
         return 0
