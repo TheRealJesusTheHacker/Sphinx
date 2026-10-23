@@ -79,10 +79,20 @@ class RuleState(
                     "custom" -> customRaw.add(value)
                 }
             }
+            // Allow/custom values are single entries in this store's
+            // own tab-separated format — the shape serializeLines
+            // writes — so each one goes through normalizeEntry alone.
+            // Feeding them to the list-file parser (parseEntries)
+            // would also accept hosts-file shapes and trailing
+            // comments here: a stored line like
+            // "allow<TAB>0.0.0.0 bank.example.com" would silently
+            // allow bank.example.com, a value that appears nowhere
+            // in the file as an entry — a stored state must do
+            // exactly what it appears to do, nothing more.
             return RuleState(
                 appRules = AppRules.parse(appLines.asSequence()),
-                allowlistEntries = Blocklist.parseEntries(allowRaw.asSequence()),
-                customBlockEntries = Blocklist.parseEntries(customRaw.asSequence()),
+                allowlistEntries = allowRaw.mapNotNull { Blocklist.normalizeEntry(it) },
+                customBlockEntries = customRaw.mapNotNull { Blocklist.normalizeEntry(it) },
             )
         }
     }

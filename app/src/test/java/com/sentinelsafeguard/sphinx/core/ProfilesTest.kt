@@ -188,6 +188,44 @@ class ProfilesTest {
     }
 
     @Test
+    fun stateLinesDoNotAcceptHostsFileShapes() {
+        // RuleState lines are this store's own tab-separated format,
+        // not a list file: a value must be one entry, exactly as
+        // written. A hosts-shaped value ("0.0.0.0 name") must not
+        // smuggle in an entry that appears nowhere in the file as
+        // a value of its own.
+        val state = RuleState.parse(
+            sequenceOf(
+                "allow\t0.0.0.0 smuggled.example.com",
+                "custom\t127.0.0.1 planted.example.net",
+                "allow\tkept.example.com",
+                "custom\tblocked.example.org",
+            ),
+        )
+        assertEquals(setOf("kept.example.com"), state.allowlistEntries)
+        assertEquals(setOf("blocked.example.org"), state.customBlockEntries)
+    }
+
+    @Test
+    fun stateLinesDoNotStripListFileComments() {
+        // Same discipline at the profile-file level: a value with a
+        // trailing "# ..." note is not a clean entry in this format
+        // (serializeLines never writes one), so it is dropped rather
+        // than silently honoring the name in front of the note.
+        val parsed = ProfileSet.parse(
+            sequenceOf(
+                "profile\tHome",
+                "allow\tbank.example.com # a note",
+                "allow\thonest.example.com",
+            ),
+        )
+        assertEquals(
+            setOf("honest.example.com"),
+            parsed.profile("Home")!!.state.allowlistEntries,
+        )
+    }
+
+    @Test
     fun sectionWithInvalidNameIsSkippedEntirely() {
         val parsed = ProfileSet.parse(
             sequenceOf(
