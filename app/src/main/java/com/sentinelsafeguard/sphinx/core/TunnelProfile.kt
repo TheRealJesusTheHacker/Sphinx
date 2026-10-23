@@ -23,10 +23,12 @@ import java.util.Base64
  *
  * An OpenVPN config is *recognized* as a stored, labeled record
  * (protocol=openvpn, text preserved); connecting one is refused
- * in Phase 1 with the reason named — see [OPENVPN_CONNECT_REFUSAL].
- * That refusal is the honest Phase 1 behavior per TUNNEL-SPEC,
- * tied to the Android OpenVPN licensing gate (GPLv3/AGPLv3
- * embeddable options would end the edition's MIT story).
+ * with the reason named — see [OPENVPN_CONNECT_REFUSAL]. That
+ * refusal is the honest behavior per TUNNEL-SPEC in Phase 1 and
+ * Phase 2 alike, tied to the Android OpenVPN licensing gate
+ * (GPLv3/AGPLv3 embeddable options would end the edition's MIT
+ * story). Phase 2 adds the VPN Gate public-nodes directory
+ * (core/VpnGate) on top of this same record path.
  *
  * Pure Kotlin — no Android APIs. Private keys exist here only as
  * the config text the user imported or explicitly exports; the
@@ -120,7 +122,8 @@ class WgProfile(
 }
 
 /** An OpenVPN profile record: config text preserved losslessly,
- *  labeled, never connected in Phase 1. */
+ *  labeled, and refused at connect with the reason named (the
+ *  Android licensing gate — see [TunnelProfileParser.OPENVPN_CONNECT_REFUSAL]). */
 class OvpnProfile(
     override val name: String?,
     override val endpoint: String?,
@@ -152,11 +155,14 @@ object TunnelProfileParser {
     const val REFUSAL_UNRECOGNIZED = "unrecognized-format"
 
     const val OPENVPN_CONNECT_REFUSAL: String =
-        "OpenVPN profiles are stored and labeled in this version, but " +
-            "connecting one is refused: Android has no system OpenVPN " +
-            "program to run, and the embeddable OpenVPN libraries are " +
-            "GPL/AGPL, which would end this app's MIT license story. " +
-            "This profile is kept exactly as imported."
+        "This Android version can't connect OpenVPN profiles, so " +
+            "connecting one is refused. Android has no built-in " +
+            "OpenVPN program for Sphinx to run, and the OpenVPN " +
+            "libraries that could be built in carry GPL/AGPL " +
+            "licenses that would change Sphinx's free MIT license " +
+            "— that decision belongs to Sentinel, not to a silent " +
+            "update. WireGuard profiles connect normally. This " +
+            "profile is kept exactly as imported."
 
     private const val NAME_PREFIX = "# Sphinx profile:"
 
@@ -212,7 +218,13 @@ object TunnelProfileParser {
                 break
             }
         }
-        return OvpnProfile(fallbackName?.trim()?.takeIf { it.isNotEmpty() }, endpoint, lines)
+        // Sphinx's own name comment (written on directory
+        // imports — see core/VpnGate.importTextFor) names the
+        // profile, exactly as it does for WireGuard; otherwise
+        // the caller's fallback (the file name) does.
+        val name = lines.firstOrNull()?.let { sphinxNameOf(it) }
+            ?: fallbackName?.trim()?.takeIf { it.isNotEmpty() }
+        return OvpnProfile(name, endpoint, lines)
     }
 
     private fun parseWireGuard(lines: List<String>, fallbackName: String?): TunnelParseResult {
