@@ -507,3 +507,35 @@ honesty rules hold (names, not content; nothing leaves the device).
   stood when Phase 4 closed; the tile has since been built and
   its code is in the v1.0.1 tag — the Android edition itself
   still ships nothing, per the v1.0.1 record above.)
+- **Android completion pass — 2026-10-23.** The Android
+  unit-test suite has been run end-to-end for the first
+  time: **115 tests, 115 passed, 0 failed** — the full
+  JUnit run over the real sources with the project's own
+  toolchain (Temurin 17, Kotlin 2.0.20), corroborated by a
+  green Gradle `testDebugUnitTest` in CI (workflow run
+  40004668287). The "90 tests" figure carried before this
+  pass was stale; 115 is the counted, run figure. (The
+  sandbox the fleet works from blocks the JVM networking
+  Gradle's daemon and raw UDP need, so the counted run
+  used the standalone Kotlin compiler with the same
+  friend-module semantics AGP applies; the Gradle route
+  itself is the one proven in CI.) The signed-release path
+  is now wired: `app/build.gradle.kts` takes signing only
+  from the `SPHINX_ANDROID_*` environment variables — the
+  owner's keystore; a partly-set signing environment fails
+  configuration outright, and the `signedRelease` task
+  refuses without them (proven in CI, run 40005602946:
+  "No signed Sphinx release can be built here: the signing
+  environment is not set… Unsigned and debug-signed builds
+  are compile proofs only — never releases."). A dispatch
+  workflow (`.github/workflows/sphinx-android.yml`) runs
+  the test gate on demand and, when dispatched with
+  `build_signed` after the owner adds the keystore
+  secrets, produces the apksigner-verified signed APK as
+  a workflow artifact — its own secret gate proven
+  refusing without the secrets (run 40005050493). No
+  debug-key fallback exists anywhere in the path.
+  **Android still ships nothing** — the owner's release
+  keystore does not exist yet, and the phone smoke pass
+  remains owed; the APK joins a release when those two
+  owner steps are done.
