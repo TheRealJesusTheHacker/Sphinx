@@ -70,6 +70,7 @@ def instance_name(username: Optional[str] = None) -> str:
 
 ELEVATED_ATTEMPTED_FLAG = "--elevated-attempted"
 RESTORE_DNS_FLAG = "--restore-dns"
+RESTORE_VPN_FLAG = "--restore-vpn"
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,7 @@ class LaunchOptions:
     autostart: bool = False
     elevated_attempted: bool = False
     restore_dns: bool = False
+    restore_vpn: bool = False
 
 
 def parse_launch_args(argv: Sequence[str]) -> LaunchOptions:
@@ -88,6 +90,7 @@ def parse_launch_args(argv: Sequence[str]) -> LaunchOptions:
         autostart=AUTOSTART_FLAG in args,
         elevated_attempted=ELEVATED_ATTEMPTED_FLAG in args,
         restore_dns=RESTORE_DNS_FLAG in args,
+        restore_vpn=RESTORE_VPN_FLAG in args,
     )
 
 

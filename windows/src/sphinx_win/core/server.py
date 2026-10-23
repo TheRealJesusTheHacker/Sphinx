@@ -95,6 +95,18 @@ class FilterEngine:
         self.blocked_count = 0
         self.allowed_count = 0
 
+    def set_forwarder(self, forwarder: Forwarder) -> None:
+        """Swap the upstream forwarder (VPN + Blocker mode points
+        allowed queries at the profile's DNS servers through the
+        tunnel, TUNNEL-SPEC's mode model; disconnecting restores
+        the default). The DNS decision itself never changes with
+        the forwarder: blocked names are sinkholed locally and
+        immediately either way, and an unlisted name is forwarded
+        through the forwarder's full fallback discipline — the
+        forwarder is replaced whole, never wrapped in a way that
+        could swallow a query the fallback would have answered."""
+        self._forwarder = forwarder
+
     def reload(self) -> None:
         """Force the next query to re-read the provider's lists.
 

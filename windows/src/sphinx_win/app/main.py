@@ -38,7 +38,8 @@ from pathlib import Path
 # imported *through* this module (or as sphinx_win.app.main via -m),
 # so both launch shapes work.
 from sphinx_win.core.store import Store
-from sphinx_win.dnsmgmt.base import NotElevatedError
+from sphinx_win.core.tunnelstore import TunnelStore
+from sphinx_win.dnsmgmt.base import AdapterDns, NotElevatedError
 from sphinx_win.dnsmgmt.guard import DnsGuard
 from sphinx_win.dnsmgmt.windows_impl import WindowsDnsManager, is_user_admin
 from sphinx_win.app.controller import SphinxController
@@ -61,7 +62,14 @@ def default_data_dir() -> Path:
 def build_controller(data_dir: Path) -> SphinxController:
     store = Store(data_dir)
     manager = WindowsDnsManager()
-    return SphinxController(store, manager, data_dir)
+    from sphinx_win.tunnelmgmt.windows_impl import WindowsTunnelManager
+
+    return SphinxController(
+        store,
+        manager,
+        data_dir,
+        tunnel_manager=WindowsTunnelManager(),
+    )
 
 
 def restore_dns_main(data_dir=None, manager_factory=None, out=print) -> int:
@@ -97,6 +105,83 @@ def restore_dns_main(data_dir=None, manager_factory=None, out=print) -> int:
         return 3
     out(result.message)
     return 0 if result.ok else 3
+
+
+def restore_vpn_main(data_dir=None, tunnel_manager_factory=None,
+                     dns_manager_factory=None, out=print) -> int:
+    """The headless VPN teardown: if Sphinx holds a tunnel state
+    record, take the tunnel down and restore exactly what the
+    record holds (a VPN-only session's DNS originals), verifying
+    each restore, and retire the record only when everything
+    verifies. Exit code 3 means the teardown could not be
+    verified — the record is kept, and the message says why. The
+    installer's uninstaller runs this BEFORE the DNS restore and
+    before any file is removed, and aborts on a nonzero code:
+    Sphinx never strands a machine with a tunnel (or tunnel DNS)
+    pointed at an edition that no longer exists. Exactly the DNS
+    uninstall discipline, one record over.
+
+    Note what this can and cannot do: the tunnel adapter belongs
+    to the tray process that created it (WireGuardNT's sockets
+    are owned by the creating process). Run while that host is
+    still up, the host's own quit path is the teardown (the
+    installer closes applications first — CloseApplications —
+    and a running host's quit disconnects the VPN before it
+    exits). This headless path owns the record-level restore:
+    it asks the manager to take down any adapter THIS process
+    holds (a fresh headless process holds none), and restores
+    the record's DNS, verified — the part an uninstall must not
+    leave behind even when the host is already gone."""
+    data_dir = Path(data_dir) if data_dir is not None else default_data_dir()
+    try:
+        tunnel_store = TunnelStore(data_dir)
+        state = tunnel_store.load_state()
+        if state is None:
+            out("Sphinx holds no tunnel record; nothing to tear down.")
+            return 0
+        if tunnel_manager_factory is not None:
+            manager = tunnel_manager_factory()
+        else:
+            from sphinx_win.tunnelmgmt.windows_impl import WindowsTunnelManager
+
+            manager = WindowsTunnelManager()
+        try:
+            manager.down()
+        except Exception:
+            pass  # the record-level restore below is the verified part
+        if state.dns_originals:
+            dns_manager = (dns_manager_factory or WindowsDnsManager)()
+            failed = []
+            for raw in state.dns_originals:
+                adapter = AdapterDns.from_dict(raw)
+                try:
+                    dns_manager.set_dns(
+                        adapter.interface_alias,
+                        adapter.family,
+                        list(adapter.servers),
+                    )
+                    if dns_manager.get_dns(
+                        adapter.interface_alias, adapter.family
+                    ) != list(adapter.servers):
+                        failed.append(adapter)
+                except Exception:
+                    failed.append(adapter)
+            if failed:
+                names = ", ".join(
+                    f"{a.interface_alias} ({a.family})" for a in failed
+                )
+                out(
+                    "Sphinx could not put back the DNS settings its "
+                    f"VPN session saved (unverified on: {names}), "
+                    "so the tunnel record was kept."
+                )
+                return 3
+        tunnel_store.clear_state()
+    except Exception as e:
+        out(f"Sphinx could not tear down its VPN session record ({e}).")
+        return 3
+    out("The VPN session is torn down and its settings are restored.")
+    return 0
 
 
 def try_claim_server(make_server, remove_server, probe_connect, name):
@@ -166,6 +251,8 @@ def acquire_instance(probe_connect, try_listen, *, attempts=3,
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     launch = parse_launch_args(argv)
+    if launch.restore_vpn:
+        return restore_vpn_main()
     if launch.restore_dns:
         return restore_dns_main()
 
