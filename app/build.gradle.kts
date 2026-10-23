@@ -75,6 +75,11 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // The WireGuard tunnel library uses Java 8+ APIs (and
+        // records in its statistics classes); desugaring keeps
+        // them working back to minSdk. Recommended by the
+        // library's own embedding notes.
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions {
         jvmTarget = "17"
@@ -112,6 +117,19 @@ tasks.configureEach {
 }
 
 dependencies {
-    // No AndroidX, no runtime dependencies: the filter core is pure Kotlin.
+    // The filter core is pure Kotlin with no runtime dependencies.
+    // VPN (TUNNEL) mode adds exactly two, both license-verified
+    // from primary sources before pinning (2026-10-23) and both
+    // attributed in assets/third-party/THIRD-PARTY-NOTICES.txt:
+    //  - com.wireguard.android:tunnel — Apache-2.0 (Maven POM +
+    //    the wireguard-android repo's COPYING file); its
+    //    userspace backend wireguard-go is MIT (its LICENSE).
+    //  - com.google.zxing:core — Apache-2.0 (POM header + the
+    //    ZXing repo's LICENSE); QR import/export of the same
+    //    WireGuard config text, no second format.
+    // Exact versions only — no dynamic ranges, ever.
+    implementation("com.wireguard.android:tunnel:1.0.20250531")
+    implementation("com.google.zxing:core:3.5.3")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     testImplementation("junit:junit:4.13.2")
 }

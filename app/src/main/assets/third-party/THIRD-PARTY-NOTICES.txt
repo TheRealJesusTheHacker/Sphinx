@@ -1,0 +1,48 @@
+Third-party notices — Sphinx for Android, VPN (TUNNEL) mode
+============================================================
+
+Sphinx itself is released under the MIT License (see the
+repository LICENSE). VPN mode BUNDLES the components below
+inside the app. Bundling them does not change Sphinx's
+license; each component keeps its own license, reproduced in
+this folder, and this notices file travels with the app as
+those licenses require.
+
+WireGuard Tunnel Library (com.wireguard.android:tunnel)
+--------------------------------------------------------
+Version pinned: 1.0.20250531 (exact version, Maven Central).
+License: Apache License, Version 2.0.
+License text: LICENSE-APACHE-2.0.txt in this folder.
+Verified before integration (2026-10-23) from primary
+sources: the artifact's Maven POM declares "The Apache
+Software License, Version 2.0", and the wireguard-android
+repository's COPYING file is the Apache-2.0 text.
+Copyright (c) 2017-2025 WireGuard LLC. WireGuard is a
+registered trademark of Jason A. Donenfeld.
+
+wireguard-go (userspace WireGuard backend, bundled inside
+the tunnel library above)
+--------------------------------------------------------
+License: MIT License.
+License text: LICENSE-WIREGUARD-GO-MIT.txt in this folder.
+Verified before integration (2026-10-23) from the
+wireguard-go repository's LICENSE file.
+
+ZXing Core (com.google.zxing:core) — QR code encode/decode
+----------------------------------------------------------
+Version pinned: 3.5.3 (exact version, Maven Central).
+License: Apache License, Version 2.0.
+License text: LICENSE-APACHE-2.0.txt in this folder.
+Verified before integration (2026-10-23) from primary
+sources: the ZXing repository's LICENSE file is the
+Apache-2.0 text and the artifact's POM carries the same
+license header.
+Copyright (c) ZXing authors.
+
+What is NOT bundled
+-------------------
+No OpenVPN code is bundled or linked. The embeddable
+OpenVPN options for Android are GPLv3 / AGPLv3; linking
+either would end this app's honest MIT story, so OpenVPN
+profiles are stored and labeled, and connecting one is
+refused with the reason named (docs/TUNNEL-SPEC.md).
