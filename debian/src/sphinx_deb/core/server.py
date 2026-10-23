@@ -42,6 +42,7 @@ from typing import Callable, List, Optional, Tuple
 from .blocklist import FilterLists
 from .dnswire import build_query, build_sinkhole_response, parse_query
 from .forwarder import (
+    MAX_SYSTEM_RESOLVERS,
     UPSTREAM_RESOLVERS,
     UPSTREAM_TIMEOUT_S,
     Forwarder,
@@ -67,7 +68,7 @@ TCP_READ_TIMEOUT_S = 10.0
 #: How long the liveness proof (answers_on) waits by default. The
 #: proof queries an allowed name, so its answer comes back through
 #: the forwarder — whose worst case is one full timeout per
-#: upstream resolver. The proof's budget must exceed that worst
+#: resolver in its chain, the machine's own floor included. The proof's budget must exceed that worst
 #: case, or a healthy filter can fail its own proof on a machine
 #: whose first resolver is unreachable and whose second is slow
 #: (Sweep #3, W-6 — fixed on Windows; the same fix landed here in
@@ -75,7 +76,7 @@ TCP_READ_TIMEOUT_S = 10.0
 #: 2-second default). One second of headroom over the worst case;
 #: the fail-safe property is unchanged — DNS never moves unless
 #: the proof actually passes.
-PROOF_TIMEOUT_S = len(UPSTREAM_RESOLVERS) * UPSTREAM_TIMEOUT_S + 1.0
+PROOF_TIMEOUT_S = (len(UPSTREAM_RESOLVERS) + MAX_SYSTEM_RESOLVERS) * UPSTREAM_TIMEOUT_S + 1.0
 
 
 class FilterEngine:

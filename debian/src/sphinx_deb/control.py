@@ -36,7 +36,7 @@ CONTROL_SOCKET_NAME = "control.sock"
 #: would report a healthy-but-slow filter as not answering. This
 #: budget covers the proof plus the round trip around it (Sweep
 #: #4, the transport half of the W-6 parity fix).
-PROOF_REQUEST_TIMEOUT_S = 10.0
+PROOF_REQUEST_TIMEOUT_S = 16.0
 
 
 def control_socket_path(runtime_dir: Path) -> Path:
