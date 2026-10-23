@@ -20,7 +20,12 @@ Windows *service* (Phase 2's host is a tray process — the section
 below says why, plainly). This edition first shipped as **v0.3.0 in
 Sphinx v1.0.0 (2026-10-23)**; the current release is **v0.3.1
 in Sphinx v1.0.1 (2026-10-23)**, carrying the W-1–W-7
-restore-discipline fixes and the R-17 installer branding. Both
+restore-discipline fixes and the R-17 installer branding.
+**Landed on `main` after v1.0.1, not yet in a release: VPN
+mode Phase 1** ([../docs/TUNNEL-SPEC.md](../docs/TUNNEL-SPEC.md)) —
+WireGuard server profiles, the four-mode model, and the kill
+switch, in the "VPN mode" section below; OpenVPN connections
+and the VPN Gate directory are Phase 2 there. Both
 releases passed the release gate in the roadmap (independent
 audit → fix → re-audit, CI builds on the released commit,
 published checksums verified by re-download). The real-machine
@@ -145,6 +150,204 @@ install → engage → uninstall pass on a real machine has not
 happened yet — v1.0.0 shipped with that pass named in its
 release notes as still owed, alongside the other real-Windows
 proofs, and this README won't pretend otherwise.
+
+## VPN mode (TUNNEL-SPEC Phase 1 — WireGuard)
+
+The shared tunnel spec ([../docs/TUNNEL-SPEC.md](../docs/TUNNEL-SPEC.md))
+adds a real VPN mode beside the blocker. The four modes, as the
+window and tray state them: **Off**, **Blocker only** (the
+behavior above, untouched), **VPN only**, and **VPN + Blocker**.
+
+> In VPN mode, your traffic passes through the server you choose —
+> that's how a VPN works. Sphinx ships no servers of its own in
+> your list; a profile is a server you added or one your provider
+> gave you.
+
+- **The server list starts empty.** No bundled servers, no sample
+  locations, no mock entries — ever. The picker's first-run state
+  is an honest "No servers yet — add one from a config file or
+  paste a config your provider gave you." Servers are added by
+  importing a standard WireGuard `.conf` (or, as a stored and
+  labeled record, an OpenVPN `.ovpn` — see Phase scope below).
+  Import validates against the shared corpus
+  (`docs/tunnel-corpus.json`, which the test suite reads
+  directly): bad keys, an endpoint with no port, bad CIDRs, and a
+  missing server key are each refused with the reason named, and
+  a refused import stores nothing. Round-trip is lossless —
+  unknown lines and comments survive parse → export exactly.
+- **A filter, not a wall** (the owner's standing criterion): in
+  Blocker and VPN + Blocker, Sphinx's only action is the DNS
+  decision — listed names get the sinkhole answer, built locally
+  and immediately, and **every unlisted name resolves normally
+  and its traffic passes untouched**, including names that merely
+  look tracker-adjacent. The unlisted path keeps the forwarder's
+  honest fallback discipline end to end: an unlisted name fails
+  only when every upstream genuinely fails, never because an
+  internal error swallowed the query. The suite proves this with
+  named conformance tests
+  (`tests/test_questions_names_conformance.py`): an unlisted
+  name resolves **and** its traffic passes on the blocker path
+  and on the VPN + Blocker path, a blocked name sinkholes fast
+  even behind a dead upstream, and a dead first upstream is
+  survived via the fallback. The only blocking anywhere in a
+  tunnel mode beyond DNS decisions is the kill switch, below.
+- **How the modes wire DNS.** VPN + Blocker: the local filter
+  runs exactly as in Blocker only (system DNS at loopback, under
+  the audited DNS backup), and its forwarder's upstreams become
+  the profile's DNS servers, reached through the tunnel. VPN
+  only: the filter does not run and DNS is **unfiltered — the UI
+  says so where the mode is offered**; when the profile names DNS
+  servers, the machine's DNS is pointed at them as *tunnel-record*
+  state (saved first into `tunnel-state.json` in the data folder,
+  verified, and restored exactly) — the DNS guard's backup
+  contract is never rewritten for the tunnel's sake; the two
+  records are parallel. A profile with no DNS field leaves system
+  DNS as it was, reached through the tunnel, and claims nothing
+  else. A split-tunnel profile (allowed IPs narrower than
+  everything) is labeled "some traffic" at the picker.
+- **Endpoint pinning.** A hostname endpoint is resolved *before*
+  the tunnel engages, with the pre-tunnel resolver, and that
+  answer is pinned for the session; the tunnel never re-resolves
+  its own doorway from inside itself. The server's identity is
+  the profile's pinned public key: a machine at the endpoint
+  presenting a different key cannot complete a WireGuard
+  handshake — and since Sphinx claims "connected" **only** from
+  a fresh handshake reported by the backend (never from intent,
+  configuration, or a process running), a wrong-key server shows
+  as the disconnect state below, never as connected.
+- **Kill switch.** While VPN intent is armed, a tunnel that
+  drops **blackholes the traffic it covers** — the adapter and
+  its routes stay, nothing falls back to the direct route — and
+  the status says so in plain words: *"VPN disconnected —
+  traffic is blocked, not going around the tunnel,"* with the
+  two visible choices, **Reconnect** or **Disconnect**
+  (disconnect returns to the mode you had before the VPN,
+  through the ordinary stop path: tunnel down first, then the
+  DNS restore). No silent full-block state exists in any mode,
+  and no mode transition strands the machine without the UI
+  saying so.
+- **Elevation, plainly.** Connecting, disconnecting, and
+  reconnecting change adapters and routes, so they need
+  administrator rights. Without them the Connect button is
+  disabled and the window says why: Windows asks once with its
+  standard prompt when Sphinx is restarted as administrator; if
+  you decline, the VPN stays off and Sphinx does not ask again
+  in a loop. Nothing about a tunnel change is ever attempted
+  unelevated.
+- **Records and resumption.** The profile store
+  (`vpn-profiles.json`) and the tunnel state record
+  (`tunnel-state.json`: mode, profile, intent, the pinned
+  endpoint, and any DNS originals a VPN-only session must
+  restore) live in the per-user data folder under the same
+  atomic-write discipline as every Sphinx store; a corrupt
+  record is refused loudly and left exactly as found — never
+  silently degraded to "empty" or "off." Private keys live only
+  inside a profile's config text in that folder and are never
+  logged. A record found at startup with no live tunnel is a
+  *leftover*: it is surfaced for your own reconnect/disconnect
+  decision — tunnel resume-by-re-proof at sign-in is **not**
+  wired in Phase 1 (protection resume above is the blocker's);
+  the record waits for you rather than taking anything over.
+  Locally created profiles get their keypair on this device,
+  from a vetted Curve25519 means only (the official `wg`
+  tooling when present, else the `cryptography` library's
+  X25519) — Sphinx never hand-rolls key material, and when no
+  vetted means exists it says so instead of inventing one;
+  importing a provider config works regardless, since the
+  config carries its key.
+
+### The WireGuard route — evaluated, with the license evidence
+
+The ownership model decided the shape before licensing did: one
+tray-resident process owns the window, the tray, the filter, and
+the DNS guard state, so the tunnel has exactly one owner too.
+Two routes were evaluated against that model and the spec's
+license honesty rule (every component is **bundled** or
+**invoked**, stated plainly):
+
+**(a) EMBED WireGuardNT — CHOSEN (bundled).** The tray process
+hosts the tunnel through the official WireGuardNT distribution:
+it loads `wireguard.dll` at runtime and drives it through the
+Permitted API of `wireguard.h` (`WireGuardCreateAdapter`,
+`WireGuardSetConfiguration`, `WireGuardSetAdapterState`,
+`WireGuardGetConfiguration`), programming the adapter's
+addresses and the profile's routes through Windows' own
+networking cmdlets. Terms, verified from the primary sources on
+2026-10-23 — not assumed:
+
+- `wintun.net` states Wintun's source is GPLv2, but "the
+  prebuilt signed DLLs are released under a more permissive
+  license than GPLv2," included in the zip. The actual text
+  inside `wintun-0.14.1.zip` is WireGuard LLC's **Prebuilt
+  Binaries License**: no modification, no reverse engineering,
+  no removing notices, no use of the WireGuard/Wintun names to
+  endorse — and redistribution is prohibited **except** "insofar
+  as the Software is distributed alongside other software that
+  uses the Software only via the Permitted API."
+- The wireguard-nt distribution (`wireguard-nt-1.0.zip` from
+  `download.wireguard.com`) carries the **same Prebuilt Binaries
+  License** for `wireguard.dll`, with the same redistribution
+  carve-out for software using only the `wireguard.h` API. Its
+  own README's deployment model is exactly this: "Install the
+  `wireguard.dll` file side-by-side with your application."
+- So the obligations are: ship the DLL **unmodified**, use it
+  only via its published API, ship its license text with it,
+  and never call it MIT (Sphinx's own code is MIT; the DLL is
+  WireGuard LLC's, under its own terms). The installer and
+  portable editions ship `packaging/third-party/wireguard.dll`
+  (the distribution's `bin/amd64` file, SHA-256
+  `40add3d0…eca7`, pinned by the test suite) beside
+  `WireGuardNT-LICENSE.txt`; `packaging/third-party/PROVENANCE.md`
+  records the distribution, its hash, and this reasoning.
+- **`wintun.dll` is not bundled**: WireGuardNT is a kernel
+  implementation and does not use Wintun (which serves
+  userspace implementations). Bundling an unused DLL would
+  misstate what runs. Its terms check out for the same model
+  if a future userspace backend ever needs it.
+
+**(b) SUPERVISE the official WireGuard for Windows tunnel
+service — not chosen (would have been invoked).** Sphinx would
+write a config and install/control a named tunnel service
+through the official tooling; the user would first have to
+install WireGuard for Windows (a separate GPLv2 program —
+arm's length, so the license story stays clean). It loses on
+ownership and honesty-of-experience: a second program owns the
+tunnel state Sphinx must report truthfully (handshake freshness
+becomes someone else's process to interrogate), the install is
+a dependency with a real UX cost ("install this other program
+first"), and uninstall interplay runs both ways — removing
+WireGuard for Windows would strand Sphinx's VPN, removing
+Sphinx must not strand theirs. The embed route has none of
+those, and its license terms (above) are expressly written for
+this use.
+
+**Phase 1 scope, honestly.** WireGuard profiles **connect**.
+OpenVPN profiles parse, store, display, and are **refused at
+connect with the reason named** — OpenVPN connections (through
+the system `openvpn` program, invoked at arm's length) and the
+VPN Gate public-nodes directory are Phase 2. The VPN Gate
+directory does not exist in the picker yet; the list holds only
+servers you add. And the real-machine boundary, stated as
+plainly as everywhere else in this README: the mode model, the
+corpus, the store discipline, and the config-blob layout are
+proven by the suite (277 passed / 5 skipped in the dev
+environment, against the 195 passed / 4 skipped pre-VPN
+baseline — the Qt UI modules are among the skips wherever
+PySide6 is absent and run in CI and in a Qt-complete
+environment), but bringing a
+real adapter up on a real Windows machine — handshake against a
+live server, routes in force, kill-switch behavior under a
+pulled cable — has **not** happened yet and is a release gate,
+not a claim this section makes.
+
+**Uninstalling with the tunnel up.** The uninstaller's first
+act — before the DNS restore, before any file is removed — is
+`Sphinx.exe --restore-vpn`: the tunnel session is torn down and
+exactly what its record holds is restored and verified (a
+running tray host's own quit disconnects the VPN first; the
+uninstaller closes applications before it runs). If the
+teardown cannot be verified, the uninstall **aborts with a
+plain explanation**, exactly the DNS discipline.
 
 ## Profiles (Phase 3)
 
