@@ -29,6 +29,15 @@ from typing import Callable, Optional
 
 CONTROL_SOCKET_NAME = "control.sock"
 
+#: How long a client waits for a *proof* reply. The daemon's
+#: liveness proof can legitimately take PROOF_TIMEOUT_S (the
+#: forwarder's worst case plus headroom — see core/server.py), so
+#: a client that gives up at the ordinary 3-second request timeout
+#: would report a healthy-but-slow filter as not answering. This
+#: budget covers the proof plus the round trip around it (Sweep
+#: #4, the transport half of the W-6 parity fix).
+PROOF_REQUEST_TIMEOUT_S = 10.0
+
 
 def control_socket_path(runtime_dir: Path) -> Path:
     return Path(runtime_dir) / CONTROL_SOCKET_NAME
@@ -46,13 +55,13 @@ class ControlClient:
         #: (Debian Phase 1 audit, finding 3.)
         self.last_error: Optional[str] = None
 
-    def request(self, payload: dict) -> Optional[dict]:
+    def request(self, payload: dict, timeout: Optional[float] = None) -> Optional[dict]:
         """One request/response round trip; None when the daemon is
         not reachable (not running, or the socket is not its)."""
         self.last_error = None
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.settimeout(self._timeout)
+                sock.settimeout(self._timeout if timeout is None else timeout)
                 sock.connect(str(self._path))
                 sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
                 chunks = bytearray()
@@ -75,7 +84,10 @@ class ControlClient:
         return raw if isinstance(raw, dict) else None
 
     def proof(self, address: str) -> bool:
-        reply = self.request({"cmd": "proof", "address": address})
+        reply = self.request(
+            {"cmd": "proof", "address": address},
+            timeout=PROOF_REQUEST_TIMEOUT_S,
+        )
         return bool(reply and reply.get("ok"))
 
     def stats(self) -> Optional[dict]:

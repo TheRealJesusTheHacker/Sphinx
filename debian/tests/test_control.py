@@ -77,3 +77,14 @@ def test_permission_denied_is_distinguished_from_absent(tmp_path, monkeypatch):
     client = ControlClient(control_socket_path(tmp_path))
     assert client.stats() is None
     assert client.last_error == "permission"
+
+
+def test_proof_request_timeout_covers_the_proof_budget():
+    # The client side of the W-6 parity fix: a proof reply can
+    # legitimately take the daemon's whole proof budget, so the
+    # request that asks for it must wait longer than that budget —
+    # the ordinary 3-second request timeout is not enough.
+    from sphinx_deb.control import PROOF_REQUEST_TIMEOUT_S
+    from sphinx_deb.core.server import PROOF_TIMEOUT_S
+
+    assert PROOF_REQUEST_TIMEOUT_S > PROOF_TIMEOUT_S

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from .. import paths
-from ..control import ControlClient, control_socket_path
+from ..control import PROOF_REQUEST_TIMEOUT_S, ControlClient, control_socket_path
 from ..core.blocklist import Blocklist
 from ..core.dnswire import TYPE_A, build_query, parse_query
 from .systemview import RESOLVED_STUB
@@ -73,8 +73,13 @@ class WireProofer:
         return None
 
     def loopback_answers(self, address: str) -> bool:
-        # The daemon's own proof first (uncounted, unlogged).
-        reply = self._client.request({"cmd": "proof", "address": address})
+        # The daemon's own proof first (uncounted, unlogged). The
+        # proof request gets the proof-sized timeout: the daemon's
+        # proof may need its full budget on a slow-upstream machine.
+        reply = self._client.request(
+            {"cmd": "proof", "address": address},
+            timeout=PROOF_REQUEST_TIMEOUT_S,
+        )
         if reply is not None:
             return bool(reply.get("ok"))
         # No control socket: prove it on the wire, the sinkhole way.

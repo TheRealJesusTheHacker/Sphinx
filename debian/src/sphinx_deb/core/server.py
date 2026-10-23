@@ -41,7 +41,12 @@ from typing import Callable, List, Optional, Tuple
 
 from .blocklist import FilterLists
 from .dnswire import build_query, build_sinkhole_response, parse_query
-from .forwarder import Forwarder, forward_query
+from .forwarder import (
+    UPSTREAM_RESOLVERS,
+    UPSTREAM_TIMEOUT_S,
+    Forwarder,
+    forward_query,
+)
 from .querylog import QueryLog
 
 #: Where the system DNS gets pointed. The filter binds both loopback
@@ -58,6 +63,19 @@ MAX_IN_FLIGHT_QUERIES = 64
 
 #: A TCP client that stalls mid-query loses its slot after this long.
 TCP_READ_TIMEOUT_S = 10.0
+
+#: How long the liveness proof (answers_on) waits by default. The
+#: proof queries an allowed name, so its answer comes back through
+#: the forwarder — whose worst case is one full timeout per
+#: upstream resolver. The proof's budget must exceed that worst
+#: case, or a healthy filter can fail its own proof on a machine
+#: whose first resolver is unreachable and whose second is slow
+#: (Sweep #3, W-6 — fixed on Windows; the same fix landed here in
+#: Sweep #4 when the Debian port was found still carrying the old
+#: 2-second default). One second of headroom over the worst case;
+#: the fail-safe property is unchanged — DNS never moves unless
+#: the proof actually passes.
+PROOF_TIMEOUT_S = len(UPSTREAM_RESOLVERS) * UPSTREAM_TIMEOUT_S + 1.0
 
 
 class FilterEngine:
@@ -288,13 +306,16 @@ class DnsFilterServer:
         self._threads.clear()
         self.bound_addresses = []
 
-    def answers_on(self, address: str, timeout: float = 2.0) -> bool:
+    def answers_on(self, address: str, timeout: float = PROOF_TIMEOUT_S) -> bool:
         """Prove the filter answers on ``address``: send a real query
         for a name no list blocks and require a parseable response.
         Used before the system DNS is pointed here — the machine is
         never aimed at a resolver that doesn't answer. The exchange
         is registered as the liveness proof first, so the engine
-        answers it without counting or logging it (see _dispatch)."""
+        answers it without counting or logging it (see _dispatch).
+        The default timeout is PROOF_TIMEOUT_S — above the
+        forwarder's worst case, because this proof's answer comes
+        back through that forwarder (see the constant)."""
         proof_id = int.from_bytes(os.urandom(2), "big")
         proof = (proof_id, "example.com")
         query = build_query("example.com", query_id=proof_id)

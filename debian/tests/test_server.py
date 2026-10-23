@@ -127,3 +127,39 @@ def test_many_queries_in_parallel_all_get_answers(server):
         t.join()
     assert len(results) == 16
     assert server.engine.blocked_count == 16
+
+
+def test_proof_timeout_exceeds_the_forwarders_worst_case():
+    # Sweep #4 (W-6 parity): the proof queries an allowed name, so
+    # it only passes when the upstream round trip returns in time.
+    # The forwarder's worst case is one full timeout per resolver;
+    # the Debian port still carried the old 2-second default, which
+    # could fail a healthy filter on a slow-upstream machine.
+    import inspect
+
+    from sphinx_deb.core.forwarder import UPSTREAM_RESOLVERS, UPSTREAM_TIMEOUT_S
+    from sphinx_deb.core.server import PROOF_TIMEOUT_S
+
+    default = inspect.signature(DnsFilterServer.answers_on).parameters["timeout"].default
+    assert default == PROOF_TIMEOUT_S
+    assert default > len(UPSTREAM_RESOLVERS) * UPSTREAM_TIMEOUT_S
+
+
+@requires_udp
+def test_answers_on_survives_a_slow_upstream():
+    # The live half: an upstream that answers correctly but slowly
+    # (past the old 2-second proof timeout) must still prove.
+    import time
+
+    def slow_forward(query: bytes) -> bytes:
+        time.sleep(3.0)
+        return _answering_forwarder(query)
+
+    engine = _engine(forwarder=slow_forward)
+    srv = DnsFilterServer(engine, port=18559)
+    bound = srv.start()
+    assert ("127.0.0.1", 18559) in bound
+    try:
+        assert srv.answers_on("127.0.0.1")  # default timeout
+    finally:
+        srv.stop()
