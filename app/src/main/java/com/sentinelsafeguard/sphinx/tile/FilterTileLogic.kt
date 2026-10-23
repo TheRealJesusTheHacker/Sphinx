@@ -26,11 +26,16 @@ object FilterTileLogic {
      *  subtitle: ON is R.string.status_on, OFF is
      *  R.string.status_off — the very strings the app's status
      *  line renders for the same flag, so the tile can never
-     *  claim a state the app itself would not claim. */
-    enum class StatusText { ON, OFF }
+     *  claim a state the app itself would not claim. VPN_ON is
+     *  the TUNNEL addition: R.string.status_tunnel_tile, the
+     *  tile's own rendering of the service's tunnel state. */
+    enum class StatusText { ON, OFF, VPN_ON }
 
-    /** What one tap does. */
-    enum class TapAction { START_FILTER, STOP_FILTER, OPEN_APP_FOR_CONSENT }
+    /** What one tap does. STOP_TUNNEL is the TUNNEL addition:
+     *  it travels through the same ACTION_STOP intent as
+     *  STOP_FILTER — the service's ordinary stop path tears
+     *  the tunnel down and returns to the pre-VPN mode. */
+    enum class TapAction { START_FILTER, STOP_FILTER, OPEN_APP_FOR_CONSENT, STOP_TUNNEL }
 
     fun tileState(running: Boolean): TileState =
         if (running) TileState.ACTIVE else TileState.INACTIVE
@@ -49,4 +54,27 @@ object FilterTileLogic {
         consentGranted -> TapAction.START_FILTER
         else -> TapAction.OPEN_APP_FOR_CONSENT
     }
+
+    // --- TUNNEL shapes (Phase 1 of VPN mode) --------------------
+    // The same logic pattern, extended — not a forked tile: one
+    // tile, one state source (the service's flags), the tunnel
+    // taking precedence in display because it is the mode that
+    // carries the device's traffic.
+
+    fun tileState(running: Boolean, tunnelActive: Boolean): TileState =
+        if (running || tunnelActive) TileState.ACTIVE else TileState.INACTIVE
+
+    fun statusText(running: Boolean, tunnelActive: Boolean): StatusText = when {
+        tunnelActive -> StatusText.VPN_ON
+        running -> StatusText.ON
+        else -> StatusText.OFF
+    }
+
+    /**
+     * Tunnel up → stop it, through ACTION_STOP (the ordinary
+     * stop path returns to the pre-VPN mode). Otherwise the
+     * filter rules above decide, unchanged.
+     */
+    fun onTap(running: Boolean, consentGranted: Boolean, tunnelActive: Boolean): TapAction =
+        if (tunnelActive) TapAction.STOP_TUNNEL else onTap(running, consentGranted)
 }
