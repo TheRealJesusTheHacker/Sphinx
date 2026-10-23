@@ -10,11 +10,15 @@ on:
     paths:
       - "debian/**"
       - "app/src/main/assets/bundled-blocklist.txt"
+      - "docs/tunnel-corpus.json"
+      - "docs/TUNNEL-SPEC.md"
       - ".github/workflows/sphinx-debian.yml"
   pull_request:
     paths:
       - "debian/**"
       - "app/src/main/assets/bundled-blocklist.txt"
+      - "docs/tunnel-corpus.json"
+      - "docs/TUNNEL-SPEC.md"
   workflow_dispatch:
 
 jobs:
@@ -56,3 +60,28 @@ jobs:
           path: |
             debian/dist/sphinx_*.deb
             debian/dist/SHA256SUMS.txt
+
+  vpn-proof:
+    # The Phase 1 CI proof bar (TUNNEL-SPEC): a REAL WireGuard
+    # endpoint on the runner (kernel WG in a network namespace —
+    # the server's implementation is free), the CLIENT side driven
+    # only by Sphinx's shipped path (profile -> guard engage ->
+    # wg-quick), asserting a fresh `wg show` handshake AND real
+    # traffic through the tunnel, plus the VPN+Blocker
+    # conformance pair (unlisted resolves / listed sinkholed) in
+    # the same run. The job fails if the tunnel carries nothing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the tunnel tools (the client's own dependency)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard-tools iproute2 iptables
+
+      - name: Prove the tunnel end to end
+        run: sudo -E python3 debian/ci/wg_proof.py

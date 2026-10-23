@@ -225,6 +225,96 @@ Turning a machine's DNS over to anything is a trust exercise, so
   other tools (dhcpcd, resolvconf) and to any setup Sphinx does not
   recognize: engage changes nothing and explains why.
 
+## VPN mode
+
+Sphinx can also run a real VPN tunnel — a **WireGuard** tunnel to
+a server *you* choose, under the shared rules in
+[../docs/TUNNEL-SPEC.md](../docs/TUNNEL-SPEC.md). The disclosure
+that spec requires, stated here where the mode is offered:
+
+> In VPN mode, your traffic passes through the server you
+> choose — that's how a VPN works. Sphinx ships no servers of
+> its own in your list; a profile is a server you added or one
+> your provider gave you.
+
+- **The server list starts empty.** No bundled servers, no
+  sample locations, no mock entries — ever. Sphinx operates no
+  VPN servers for users; a profile is your own server, your
+  employer's, or your provider's. Choosing a server is trusting
+  its operator with your traffic; Sphinx vouches for no server,
+  and a tunnel does not make you anonymous.
+- **Server profiles** (`sphinx vpn profile …`) are standard
+  WireGuard config text — the format `wg-quick`, the official
+  apps, and every provider export use. Import (from a file or
+  stdin), export, remove, and create are all there; create
+  generates this device's keypair **on this machine**, by running
+  `wg genkey` / `wg pubkey`, and prints the public key plus the
+  `[Peer]` stanza to paste into your server's config. Profiles
+  live in a root-only directory (`/var/lib/sphinx/tunnel-profiles/`,
+  mode 0700) with files at 0600, because they hold private keys —
+  and the private key never leaves this machine except inside an
+  export you explicitly make. Round-trip is lossless: import a
+  provider config and export reproduces it, unrecognized lines
+  and comments included. A malformed profile is refused at
+  import with the reason named; the rest of the store is
+  untouched.
+- **Connecting** (`sudo sphinx vpn connect <name>`) follows the
+  same save-first discipline as `engage`: the server name is
+  resolved *before* the tunnel opens, with the pre-tunnel
+  resolver, and pinned for the session; the pre-tunnel state is
+  saved and verified; the tunnel config is rendered into a
+  root-only runtime file and brought up with `wg-quick`; and
+  **connected is proven, never claimed** — `sphinx vpn status`
+  says "connected" only with a fresh handshake from `wg show`
+  (plus a routed probe through the tunnel), and shows a leftover
+  or unknown tunnel as exactly that. One tunnel at a time:
+  connecting a second profile disconnects the first through the
+  ordinary stop path. Disconnecting returns this machine to the
+  mode it had before the VPN (Blocker only, or Off).
+- **The modes are kept honest.** *VPN only*: the tunnel is up
+  and DNS goes to the profile's DNS servers through the tunnel,
+  **unfiltered** — ads are not blocked in this mode, and the
+  status says so. *VPN + Blocker*: DNS queries pass the filter
+  first; allowed queries are forwarded to the profile's DNS
+  servers through the tunnel (the configured upstreams remain as
+  the fallback chain), and blocked queries get the sinkhole
+  answer locally. In both VPN modes the filter's only action is
+  still the DNS decision — it questions names; it does not block
+  traffic. Every unlisted name resolves and its traffic passes
+  untouched, tunnel or no tunnel, and an unlisted query degrades
+  through every fallback the forwarder has rather than failing
+  because Sphinx is present.
+- **Split tunnels say so.** A profile whose allowed-IPs cover
+  everything is "all traffic"; anything narrower is shown as
+  "some traffic" wherever the profile appears.
+- **Kill switch.** A tunnel that drops never becomes a direct
+  connection by itself: covered traffic **blocks** — it does not
+  fall back to the direct route — until you act. The status says
+  so in plain language ("VPN disconnected — traffic is blocked,
+  not going around the tunnel") with your two choices visible:
+  reconnect, or disconnect on purpose (which returns to the
+  pre-VPN mode). Removing the package while a tunnel is up tears
+  the tunnel down first — tunnel down, then DNS restore — and
+  stops the removal loudly if the tunnel cannot be brought down.
+- **Phase 1 scope, honestly.** WireGuard profiles **connect**.
+  OpenVPN profiles are stored, labeled (`protocol: openvpn`),
+  and preserved losslessly from Phase 1, but **connecting with
+  one arrives in Phase 2** — in Phase 1 a connect attempt is
+  refused with that reason named, never silently ignored. The
+  public volunteer-server directory (VPN Gate) is likewise
+  Phase 2 and is not in this build.
+- **Licensing — invoked, not bundled.** This edition drives the
+  kernel's WireGuard through `wireguard-tools` (`wg`,
+  `wg-quick`) — GPL-2.0 programs (verified against the upstream
+  repository's COPYING and the Debian package's own copyright
+  file) that the package declares as a dependency
+  (`Depends: wireguard-tools`) and executes as separate
+  processes. Nothing GPL is bundled, linked, or copied into
+  Sphinx; arm's-length execution of a system tool does not attach
+  its license to Sphinx, which stays MIT. If the tools are
+  missing, connecting refuses and names the remedy
+  (`sudo apt install wireguard-tools`).
+
 ## The service
 
 `sphinx.service` runs the daemon as a dedicated `sphinx` user with
@@ -285,8 +375,11 @@ debian/
   src/sphinx_deb/
     core/       the shared brain: lists, wire format, forwarding,
                 the filter engine, the store, the updater, the
-                profile model (pure Python, stdlib only)
+                profile model — and the tunnel brain: server
+                profiles, the tunnel store (pure Python, stdlib only)
     resolver/   stack detection, the engage/restore guard, proofs
+    tunnel/     the VPN guard: wg/wg-quick invoked at arm's length,
+                resolve-and-pin, prove-or-roll-back
     daemon.py   the service entry point
     control.py  the daemon's local control socket
     cli.py      the sphinx command
