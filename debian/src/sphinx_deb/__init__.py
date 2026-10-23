@@ -9,4 +9,4 @@ with CLI editing, profiles, and boot / route-change resumption for
 the resolved stack. See debian/README.md.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
