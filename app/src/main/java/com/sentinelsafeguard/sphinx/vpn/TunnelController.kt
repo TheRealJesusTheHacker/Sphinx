@@ -40,8 +40,10 @@ import java.net.InetAddress
  * packets inside the library's TUN. Phase 1 wires TUNNEL+Blocker
  * through this same backend with the profile's DNS servers
  * carried through the tunnel; the packet-level interception of
- * tunnel DNS is the known, named gap, and no copy in the app
- * claims a stronger on-device proof than exists.
+ * tunnel DNS is the known, named gap. The app states that limit
+ * where the mode is offered (the note by the connect buttons)
+ * and in the mode's status line while it runs; no copy claims
+ * filtering inside the tunnel in this build.
  *
  * Kill switch (TUNNEL-SPEC): GoBackend builds its interface
  * with setBlocking(true) — while the backend's service lives

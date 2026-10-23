@@ -99,8 +99,8 @@
     <string name="vpn_status_connected">VPN on — %1$s</string>
     <string name="vpn_status_connecting">VPN is starting — not connected until the server answers a handshake.</string>
     <string name="vpn_status_kill_switch">VPN disconnected — traffic is blocked, not going around the tunnel. Reconnect, or disconnect on purpose to go back to how things were before VPN.</string>
-    <string name="vpn_status_blocker_on">Ad blocking is on in this VPN mode.</string>
-    <string name="vpn_status_unfiltered">Ads are not blocked in this mode — DNS goes to your server\'s resolvers through the tunnel, unfiltered.</string>
+    <string name="vpn_status_blocker_on">In this build, ad blocking does not filter inside the tunnel yet — DNS goes to your server\'s resolvers through the tunnel, unfiltered.</string>
+    <string name="vpn_status_unfiltered">Ads are not blocked in this mode — DNS goes to your profile\'s resolvers through the tunnel, unfiltered. A profile with no DNS field uses the system resolvers instead.</string>
     <string name="vpn_scope_all">This profile routes all traffic through the server.</string>
     <string name="vpn_scope_some">This profile routes some traffic through the server — a split tunnel. Only the addresses in the profile go through it; the rest of your traffic does not.</string>
     <string name="vpn_profiles_empty">No servers yet. Add your server: paste its WireGuard config, pick the config file, scan a QR code of the config, or create a profile here with keys generated on this phone.</string>
@@ -117,6 +117,7 @@
     <string name="button_vpn_exclude">Apps that bypass the tunnel…</string>
     <string name="vpn_exclude_truth">Apps you exclude here bypass the tunnel entirely — their traffic leaves this phone directly, with your real address, and in VPN + ad blocking mode their DNS is not filtered either. They never enter the tunnel.</string>
     <string name="vpn_return_note">Disconnecting returns to the mode you had before VPN — blocker only, or off.</string>
+    <string name="vpn_blocker_gap_note">Honest limit of this build: the VPN + ad blocking tunnel runs, but ad blocking does not filter DNS inside the tunnel yet — lookups go to your server\'s resolvers through the tunnel, unfiltered, exactly as in VPN only. The blocking gate itself is built and tested; wiring it into the tunnel packet path is still to come.</string>
     <string name="vpn_openvpn_note">OpenVPN profile — stored and labeled. Connecting it is refused in this version (see the profile for the reason).</string>
     <string name="vpn_imported">Profile imported.</string>
     <string name="vpn_import_failed">That config was refused: %1$s. Nothing was imported and your other profiles are unchanged.</string>
