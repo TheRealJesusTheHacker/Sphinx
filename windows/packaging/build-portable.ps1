@@ -15,6 +15,10 @@ python -m PyInstaller packaging/Sphinx.spec --noconfirm --distpath dist --workpa
 $portable = Join-Path (Get-Location) 'dist\SphinxPortable'
 New-Item -ItemType Directory -Force $portable | Out-Null
 Copy-Item 'dist\Sphinx.exe' $portable
+# VPN mode's bundled WireGuardNT DLL + its license ride beside the
+# portable exe too (unmodified; packaging/third-party/PROVENANCE.md).
+Copy-Item 'packaging\third-party\wireguard.dll' $portable
+Copy-Item 'packaging\third-party\WireGuardNT-LICENSE.txt' $portable
 New-Item -ItemType File -Force (Join-Path $portable 'portable.txt') | Out-Null
 Compress-Archive -Path $portable -DestinationPath 'dist\SphinxPortable.zip' -Force
 

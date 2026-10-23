@@ -21,7 +21,25 @@ a = Analysis(
         (
             str(SRC / "sphinx_win" / "data" / "bundled-blocklist.txt"),
             "sphinx_win/data",
-        )
+        ),
+        # VPN mode (TUNNEL-SPEC): WireGuardNT's official prebuilt
+        # wireguard.dll, BUNDLED UNMODIFIED under WireGuard LLC's
+        # Prebuilt Binaries License, with that license text — both
+        # ride inside the bundle where tunnelmgmt's DLL search
+        # finds them (see packaging/third-party/PROVENANCE.md).
+        (
+            str(WINDOWS_DIR / "packaging" / "third-party" / "wireguard.dll"),
+            "sphinx_win/tunnel",
+        ),
+        (
+            str(
+                WINDOWS_DIR
+                / "packaging"
+                / "third-party"
+                / "WireGuardNT-LICENSE.txt"
+            ),
+            "sphinx_win/tunnel",
+        ),
     ],
     hiddenimports=[],
     hookspath=[],

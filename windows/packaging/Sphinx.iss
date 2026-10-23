@@ -58,6 +58,12 @@ Name: "desktopicon"; Description: "Put a shortcut on the desktop"; GroupDescript
 
 [Files]
 Source: "..\dist\Sphinx.exe"; DestDir: "{app}"; Flags: ignoreversion
+; VPN mode: WireGuardNT's official prebuilt wireguard.dll, bundled
+; UNMODIFIED under WireGuard LLC's Prebuilt Binaries License, with
+; that license text beside it (packaging/third-party/PROVENANCE.md
+; records the source distribution and the pinned hashes).
+Source: "third-party\wireguard.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "third-party\WireGuardNT-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Sphinx"; Filename: "{app}\Sphinx.exe"
@@ -75,13 +81,34 @@ var
   ResultCode: Integer;
 begin
   Result := True;
+  { FIRST, the VPN: if a tunnel session record exists, tear the
+    session down and put back exactly what it holds (a VPN-only
+    session's saved DNS settings) before anything else moves.
+    Sphinx.exe --restore-vpn exits 0 when the session is torn down
+    and verified (or none is held) and 3 when it could not be
+    verified — abort then, in plain language, exactly like the
+    DNS discipline below. }
+  if Exec(ExpandConstant('{app}\Sphinx.exe'), '--restore-vpn', '',
+          SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    if ResultCode <> 0 then
+    begin
+      MsgBox('Sphinx could not take its VPN down and put back the ' +
+             'settings its session saved, so it has not been ' +
+             'removed.' + #13#10 + #13#10 +
+             'Open Sphinx and disconnect the VPN, then uninstall ' +
+             'again. Nothing was changed.', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+  end;
   { Put back the DNS settings Sphinx holds before a single file is
     removed. Sphinx.exe --restore-dns exits 0 when the settings are
     restored (or none are held) and 3 when the restore could not be
     verified — in which case the saved record is kept and removing
     Sphinx now could leave this machine's DNS pointing at a filter
     that no longer exists. Abort, in plain language, instead. }
-  if Exec(ExpandConstant('{app}\Sphinx.exe'), '--restore-dns', '',
+  if Result and Exec(ExpandConstant('{app}\Sphinx.exe'), '--restore-dns', '',
           SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
     if ResultCode <> 0 then
