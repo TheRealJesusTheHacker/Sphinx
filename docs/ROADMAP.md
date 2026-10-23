@@ -480,3 +480,14 @@ honesty rules hold (names, not content; nothing leaves the device).
   which does not exist yet, and no debug-signed build ships. The
   three real-machine passes named in the release notes (Android
   phone, Windows machine, Debian machine) remain owed.
+- **Post-v1.0.0 fix wave — on `main`, NOT in v1.0.0.** The twelve
+  fix-wave commits after `f1afdffc8c27` (W-1–W-7 Windows
+  restore-discipline fixes, the Android truncated-answer TCP
+  completion and its forwarder hardening, the Android
+  quick-settings tile, and R-17 installer branding) landed after
+  the v1.0.0 tag was cut. They are in no release yet and ship in
+  a later one; nothing in this roadmap should be read as putting
+  them in v1.0.0. (The Phase 4 note further up that lists the
+  quick-settings tile as future work is the phase record as it
+  stood when Phase 4 closed; the tile has since been built, on
+  `main` only.)
