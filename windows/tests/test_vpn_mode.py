@@ -254,15 +254,25 @@ class TestKillSwitch:
 
 
 class TestRefusals:
-    def test_openvpn_profile_refused_at_connect_with_reason(self, tmp_path):
+    def test_openvpn_without_an_installed_client_is_an_honest_state(
+        self, tmp_path
+    ):
+        # Phase 2: OpenVPN profiles CONNECT through the user's
+        # installed OpenVPN program. This controller was built
+        # with no OpenVPN engine (the not-installed machine), so
+        # connecting names that state and the remedy — never a
+        # silent failure, never a bundled copy, nothing engaged.
+        # (Phase 1's connect refusal was superseded by Phase 2;
+        # the full OpenVPN mode model is in test_openvpn_mode.py.)
         controller, _, tunnel = make_controller(tmp_path)
         controller.tunnel_store.import_text(OPENVPN, name="Node")
         with pytest.raises(StartError) as refused:
             controller.connect_vpn("Node", with_blocker=False)
-        assert "OpenVPN" in str(refused.value)
-        assert "Phase 2" in str(refused.value)
+        assert "OpenVPN isn't installed" in str(refused.value)
+        assert "openvpn.net" in str(refused.value)
         assert not tunnel.adapter_up
         assert tunnel.up_calls == []
+        assert controller.tunnel_store.load_state() is None
 
     def test_unelevated_connect_touches_nothing(self, tmp_path):
         tunnel = FakeTunnelManager(elevated=False)

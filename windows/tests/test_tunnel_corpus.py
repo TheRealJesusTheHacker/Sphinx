@@ -83,10 +83,11 @@ def test_corpus_multi_peer_facts():
     ] == expect["peers"]
 
 
-def test_corpus_openvpn_record_connect_refusal_reason_is_named():
-    # The corpus case itself only pins the record; the Phase 1
-    # connect refusal it mandates is exercised against the mode
-    # model in test_vpn_mode.py. Here: the record's facts.
+def test_corpus_openvpn_record_facts():
+    # The corpus case pins the record's facts. (Phase 1 also
+    # mandated a connect refusal for it; Phase 2 superseded
+    # that — OpenVPN profiles now connect, exercised against
+    # the mode model in test_openvpn_mode.py.)
     profile = parse_profile(_case("openvpn-profile-record")["input_text"])
     assert profile.protocol == "openvpn"
     assert profile.endpoint == "vpn-node.example.org:1194"
