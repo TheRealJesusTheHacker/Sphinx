@@ -41,9 +41,17 @@ README won't pretend otherwise.
   loopback, that family's DNS is left exactly as it was and the
   result says so. Blocked names get the spec's sinkhole answer
   (0.0.0.0 / ::, TTL 60); allowed queries are forwarded unchanged
-  to 1.1.1.1 (fallback 9.9.9.9) under the spec's answer-validation
-  rules — connected socket, matching ID, response bit, a 3-second
-  deadline per resolver — with truncated answers completed over TCP.
+  along the spec's upstream chain — 1.1.1.1, then 9.9.9.9, then
+  this machine's own DNS servers, captured when Sphinx was turned
+  on, as the chain's floor — under the spec's answer-validation
+  rules: connected socket, matching ID, response bit, a 3-second
+  deadline per resolver, truncated answers completed over TCP.
+  The floor is what keeps an allowed name answerable on a network
+  where the public resolvers cannot be reached (an ISP that
+  intercepts outside DNS, a filtered port 53, a captive portal):
+  the chain degrades toward the network's own resolution, never
+  toward silence, and the resolver that last answered is tried
+  first on the next question.
 - Everything runs on this machine. There is no Sphinx server, no
   account, and the query log never leaves memory.
 

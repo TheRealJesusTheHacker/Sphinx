@@ -249,13 +249,22 @@ reports a running daemon as stopped just because it may not read
 its counters.
 
 While the filter runs, it counts questions blocked and let
-through. Allowed questions are forwarded unchanged to the upstream
-resolver (standard: **1.1.1.1**, fallback **9.9.9.9** — the shared
-spec's resolvers), with the spec's forwarding discipline: a
+through. Allowed questions are forwarded unchanged along the
+spec's upstream chain: the upstream resolver (standard:
+**1.1.1.1**, fallback **9.9.9.9** — the shared spec's resolvers),
+then this machine's own DNS servers as the chain's floor — read
+from the settings saved when Sphinx was turned on, so a network
+where the public resolvers cannot be reached (an ISP that
+intercepts outside DNS, a filtered port 53, a captive portal)
+still answers allowed names through the network's own resolver
+instead of silence. The forwarding discipline is the spec's: a
 connected socket per question, the answer accepted only from the
-resolver it was sent to with the matching ID and response bit set,
-one 3-second budget per resolver, truncated answers completed over
-TCP. You can set your own upstream in `/etc/sphinx/sphinx.conf`.
+resolver it was sent to with the matching ID and response bit
+set, one 3-second budget per resolver, truncated answers
+completed over TCP, and the resolver that last answered tried
+first on the next question. You can set your own upstream in
+`/etc/sphinx/sphinx.conf`; the floor is automatic and is never
+a resolver on this machine itself.
 
 ## Removing
 
