@@ -103,8 +103,12 @@ tasks.register("signedRelease") {
     dependsOn(verifyReleaseSigning, "assembleRelease")
 }
 
-tasks.named("assembleRelease") {
-    mustRunAfter(verifyReleaseSigning)
+tasks.configureEach {
+    // AGP registers its variant tasks after this script runs, so
+    // match by name whenever the task appears.
+    if (name == "assembleRelease") {
+        mustRunAfter(verifyReleaseSigning)
+    }
 }
 
 dependencies {
