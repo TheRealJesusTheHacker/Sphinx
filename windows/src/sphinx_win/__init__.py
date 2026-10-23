@@ -6,4 +6,4 @@ root. This package is the Windows implementation: a local DNS filter
 on loopback that the system DNS is pointed at while it runs.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
