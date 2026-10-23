@@ -18,12 +18,20 @@ import com.sentinelsafeguard.sphinx.core.AppRules
 import com.sentinelsafeguard.sphinx.core.CaptureMode
 import com.sentinelsafeguard.sphinx.core.DnsPacket
 import com.sentinelsafeguard.sphinx.core.DnsForwarder
+import com.sentinelsafeguard.sphinx.core.DnsPipeline
 import com.sentinelsafeguard.sphinx.core.DropCounts
 import com.sentinelsafeguard.sphinx.core.FilterLists
 import com.sentinelsafeguard.sphinx.core.IpFlow
 import com.sentinelsafeguard.sphinx.core.IpUdpPacket
+import com.sentinelsafeguard.sphinx.core.OvpnProfile
 import com.sentinelsafeguard.sphinx.core.QueryLog
+import com.sentinelsafeguard.sphinx.core.SphinxMode
+import com.sentinelsafeguard.sphinx.core.TunnelArbitration
+import com.sentinelsafeguard.sphinx.core.TunnelProfileParser
+import com.sentinelsafeguard.sphinx.core.TunnelStatusLogic
+import com.sentinelsafeguard.sphinx.core.WgProfile
 import com.sentinelsafeguard.sphinx.lists.ListStore
+import com.sentinelsafeguard.sphinx.lists.TunnelStore
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.InetAddress
@@ -32,6 +40,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -87,6 +96,15 @@ class SphinxVpnService : VpnService() {
          *  stop followed by a start. */
         const val ACTION_RESTART = "com.sentinelsafeguard.sphinx.action.RESTART"
 
+        /** TUNNEL shapes (docs/TUNNEL-SPEC.md): connect the
+         *  profile the TunnelStore state record names — VPN
+         *  only, or VPN + Blocker. ACTION_STOP tears a tunnel
+         *  down too, through the same ordinary stop path (and
+         *  returns to the pre-VPN mode). */
+        const val ACTION_START_TUNNEL = "com.sentinelsafeguard.sphinx.action.START_TUNNEL"
+        const val ACTION_START_TUNNEL_BLOCKER =
+            "com.sentinelsafeguard.sphinx.action.START_TUNNEL_BLOCKER"
+
         private const val VIRTUAL_DNS = "10.10.10.10"
         private const val VIRTUAL_DNS_V6 = "fd00:10:10::10"
         private const val DNS_PORT = 53
@@ -97,6 +115,7 @@ class SphinxVpnService : VpnService() {
         private const val OWNER_CACHE_CAP = 512
         private const val OWNER_CACHE_TTL_NANOS = 60_000_000_000L // 60 s
         private const val WORK_QUEUE_CAP = 512
+        private const val TUNNEL_POLL_MS = 5000L
         private const val SYSTEM_DNS_REFRESH_MS = 30_000L
 
         @Volatile
@@ -116,6 +135,27 @@ class SphinxVpnService : VpnService() {
          *  newest first). Memory-only; shared with the UI so the user
          *  can see and clear what Sphinx questioned. */
         val queryLog = QueryLog()
+
+        // --- TUNNEL state (display state, memory-only, the same
+        // discipline as the counters above). [tunnelConnectedFresh]
+        // is set ONLY from the backend's fresh handshake statistics
+        // (TunnelStatusLogic) — never from intent or configuration.
+        // [killSwitchBlocked] is the announced kill-switch state:
+        // intent armed, no fresh handshake. ---
+        @Volatile
+        var tunnelActive: Boolean = false
+        @Volatile
+        var tunnelWithBlocker: Boolean = false
+        @Volatile
+        var tunnelProfileName: String? = null
+        @Volatile
+        var tunnelConnectedFresh: Boolean = false
+        @Volatile
+        var killSwitchBlocked: Boolean = false
+        @Volatile
+        var lastTunnelError: String? = null
+        val tunnelRxBytes = AtomicLong(0)
+        val tunnelTxBytes = AtomicLong(0)
     }
 
     private var tunInterface: ParcelFileDescriptor? = null
@@ -152,6 +192,9 @@ class SphinxVpnService : VpnService() {
     private var running = false
 
     private lateinit var store: ListStore
+    private lateinit var tunnelStore: TunnelStore
+    private var tunnelController: TunnelController? = null
+    private var tunnelPollThread: Thread? = null
 
     // The lists in force. Loaded off the main thread (parsing a real
     // blocklist takes a moment); the first load is awaited before the
@@ -182,6 +225,7 @@ class SphinxVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         store = ListStore(this)
+        tunnelStore = TunnelStore(this)
         Thread({
             try {
                 reloadListsNow()
@@ -207,9 +251,26 @@ class SphinxVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                if (tunnelActive) {
+                    // The ordinary stop path for a tunnel:
+                    // disconnect returns to the pre-VPN mode
+                    // (stopTunnel restarts the filter when that
+                    // is where the user came from, and stopSelf
+                    // is its own call when it is not).
+                    stopTunnel()
+                    return START_NOT_STICKY
+                }
                 shutdown()
                 stopSelf()
                 return START_NOT_STICKY
+            }
+            ACTION_START_TUNNEL -> {
+                startTunnel(withBlocker = false)
+                return START_STICKY
+            }
+            ACTION_START_TUNNEL_BLOCKER -> {
+                startTunnel(withBlocker = true)
+                return START_STICKY
             }
             ACTION_RELOAD_LISTS -> {
                 // A list update, an allowlist edit, or a settings
@@ -246,6 +307,15 @@ class SphinxVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             else -> {
+                // A null-intent system restart while TUNNEL intent
+                // is armed resumes the tunnel (which re-proves
+                // its handshake before claiming connected), not
+                // the filter — the recorded mode is the user's.
+                val recorded = tunnelStore.tunnelState()
+                if (intent == null && recorded.intentOn && !tunnelActive) {
+                    startTunnel(recorded.withBlocker)
+                    return START_STICKY
+                }
                 if (!running) {
                     // Go foreground BEFORE waiting for the lists.
                     // When the boot receiver (Phase 4) starts this
@@ -338,6 +408,179 @@ class SphinxVpnService : VpnService() {
         ).apply { start() }
     }
 
+    // --- TUNNEL shapes ------------------------------------------------
+    //
+    // This service remains the single arbitration point for every
+    // mode. The TUNNEL data plane is delegated to the WireGuard
+    // library's GoBackend (see TunnelController for the stated
+    // architectural fact: the library requires its own VpnService
+    // to own the interface, and Android allows one VPN at a
+    // time). FILTER/APP_BLOCK never run alongside a tunnel: a
+    // tunnel start tears the filter's interface down through the
+    // ordinary shutdown path first, and a tunnel disconnect
+    // returns to the pre-VPN mode through the ordinary start
+    // path. In TUNNEL shapes this service's packet loop does not
+    // run at all — non-DNS traffic is the backend's to carry,
+    // untouched (TUNNEL-SPEC: the filter questions names; it
+    // does not block traffic).
+
+    private fun startTunnel(withBlocker: Boolean) {
+        startForegroundWithNotification()
+        lastTunnelError = null
+        val wasFilterOn = running
+        val preVpnMode = if (wasFilterOn) SphinxMode.FILTER else SphinxMode.OFF
+
+        // Arbitration: app-block rules + a TUNNEL shape are
+        // refused with the trade stated (TunnelArbitration).
+        // APP_BLOCK's total drop never leaks into a tunnel.
+        val decision = TunnelArbitration.tunnelRequest(
+            store.loadAppRules().blockedPackages, withBlocker,
+        )
+        if (decision is TunnelArbitration.Decision.Refused) {
+            lastTunnelError = decision.reason
+            stopSelf()
+            return
+        }
+
+        val state = tunnelStore.tunnelState()
+        val profileName = state.profileName
+        val profile = profileName?.let { tunnelStore.profile(it) }
+        if (profile == null) {
+            // A leftover state record naming a profile that is
+            // gone: shown as a leftover (the UI surfaces
+            // lastTunnelError), never silently taken over and
+            // never silently dropped — the intent is cleared
+            // only because its object no longer exists.
+            lastTunnelError = if (profileName == null) {
+                "No server profile is chosen. Add your server first, then connect."
+            } else {
+                "The server profile \"$profileName\" is no longer there. " +
+                    "Pick a profile, then connect again."
+            }
+            tunnelStore.clearTunnelIntent()
+            stopSelf()
+            return
+        }
+        if (profile is OvpnProfile) {
+            lastTunnelError = TunnelProfileParser.OPENVPN_CONNECT_REFUSAL
+            stopSelf()
+            return
+        }
+        val wgProfile = profile as WgProfile
+
+        // The ordinary stop path for whatever ran before (the
+        // filter's TUN, or a previous tunnel — one tunnel at a
+        // time, no overlap, no third state).
+        if (running) shutdown()
+        tunnelController?.disconnect()
+        clearTunnelFlags()
+
+        val controller = tunnelController
+            ?: TunnelController(this).also { tunnelController = it }
+        Thread({
+            when (val result = controller.connect(
+                wgProfile, tunnelStore.tunnelExcludedPackages(),
+            )) {
+                is TunnelController.ConnectResult.Up -> {
+                    tunnelActive = true
+                    tunnelWithBlocker = withBlocker
+                    tunnelProfileName = wgProfile.name
+                    tunnelConnectedFresh = false
+                    killSwitchBlocked = false
+                    // Intent is recorded ONLY now, at the
+                    // successful transition (TUNNEL-SPEC).
+                    tunnelStore.recordTunnelState(
+                        TunnelStore.TunnelState(
+                            mode = if (withBlocker) {
+                                SphinxMode.TUNNEL_BLOCKER
+                            } else {
+                                SphinxMode.TUNNEL
+                            },
+                            profileName = wgProfile.name,
+                            intentOn = true,
+                            withBlocker = withBlocker,
+                            preVpnMode = preVpnMode,
+                        )
+                    )
+                    startTunnelStatusPoll()
+                }
+                is TunnelController.ConnectResult.Failed -> {
+                    lastTunnelError = result.reason
+                    clearTunnelFlags()
+                    stopSelf()
+                }
+            }
+        }, "sphinx-tunnel-connect").start()
+    }
+
+    /** Disconnect the tunnel (the ordinary stop path) and
+     *  return to the mode the user had before VPN. */
+    private fun stopTunnel() {
+        val backTo = TunnelArbitration.disconnectReturnsTo(
+            tunnelStore.tunnelState().preVpnMode,
+        )
+        tunnelPollThread?.interrupt()
+        tunnelPollThread = null
+        tunnelController?.disconnect()
+        clearTunnelFlags()
+        tunnelStore.clearTunnelIntent()
+        if (backTo == SphinxMode.FILTER) {
+            startForegroundWithNotification()
+            listsReady.await(15, TimeUnit.SECONDS)
+            startFilter()
+        } else {
+            stopSelf()
+        }
+    }
+
+    private fun clearTunnelFlags() {
+        tunnelActive = false
+        tunnelWithBlocker = false
+        tunnelProfileName = null
+        tunnelConnectedFresh = false
+        killSwitchBlocked = false
+    }
+
+    /**
+     * The status poll: every few seconds the backend's own
+     * handshake statistics decide what the status may claim.
+     * Connected = backend up AND a fresh handshake — never
+     * intent, never configuration. Armed intent without that
+     * proof is the kill-switch state, and it is surfaced
+     * ([killSwitchBlocked] → the app's plain-language status
+     * with the one-tap intentional disconnect), never silent.
+     * Boot resume re-proves through this same poll: a resumed
+     * tunnel shows blocked/not-connected until a handshake
+     * completes fresh.
+     */
+    private fun startTunnelStatusPoll() {
+        tunnelPollThread?.interrupt()
+        tunnelPollThread = Thread({
+            while (tunnelActive) {
+                try {
+                    Thread.sleep(TUNNEL_POLL_MS)
+                } catch (e: InterruptedException) {
+                    break
+                }
+                val controller = tunnelController ?: break
+                val up = controller.isBackendUp()
+                val handshake = controller.latestHandshakeEpochMs()
+                val now = System.currentTimeMillis()
+                tunnelConnectedFresh =
+                    TunnelStatusLogic.isConnectedFresh(up, handshake, now)
+                killSwitchBlocked = TunnelStatusLogic.killSwitchBlocking(
+                    intentArmed = tunnelActive,
+                    backendUp = up,
+                    lastHandshakeEpochMs = handshake,
+                    nowEpochMs = now,
+                )
+                val totals = controller.transferTotals()
+                tunnelRxBytes.set(totals.first)
+                tunnelTxBytes.set(totals.second)
+            }
+        }, "sphinx-tunnel-status").apply { isDaemon = true; start() }
+    }
+
     /**
      * The interface for one capture mode. In FILTER mode this never
      * fails to build. In APP_BLOCK mode it returns null when no
@@ -425,12 +668,55 @@ class SphinxVpnService : VpnService() {
                     if (mode == CaptureMode.APP_BLOCK) dropPacket(packet)
                     else handlePacket(packet, output)
                 }
+            } catch (e: RejectedExecutionException) {
+                // The bounded queue is full under a flood, or the
+                // pool shut down mid-stop. In APP_BLOCK mode a
+                // refused packet is dropped, which is the point
+                // of that mode. In FILTER mode a swallowed DNS
+                // query with no answer is exactly the "whole app
+                // looks offline" failure (TUNNEL-SPEC: a blocked
+                // name fails fast and clean, never by timeout) —
+                // so a BLOCKED name is sinkholed right here, on
+                // the reader thread, where the answer is pure
+                // local computation and immediate. An unlisted
+                // name is never answered wrongly: it is left for
+                // the asking app to retry, per FILTER-SPEC.
+                if (mode == CaptureMode.FILTER) fastSinkhole(packet, output)
             } catch (e: Exception) {
-                // Pool shut down mid-stop, or the bounded queue is
-                // full under a flood: drop the packet (see
-                // newWorkerPool); the loop condition ends the thread
-                // on the next pass when shutting down.
+                // Pool shut down mid-stop; the loop condition ends
+                // the thread on the next pass when shutting down.
             }
+        }
+    }
+
+    /**
+     * The queue-saturation escape hatch (see packetLoop): answer
+     * a BLOCKED name's query immediately, without a worker. Only
+     * the sinkhole path runs here — forwarding an unlisted name
+     * can block on the network for seconds and must never stall
+     * the reader thread, so unlisted queries are left unanswered
+     * for the asker to retry, exactly as an upstream timeout
+     * leaves them.
+     */
+    private fun fastSinkhole(packet: ByteArray, output: FileOutputStream) {
+        try {
+            val ip = IpUdpPacket.parse(packet, packet.size) ?: return
+            if (ip.destPort != DNS_PORT) return
+            if (!ip.destAddress.contentEquals(VIRTUAL_DNS_BYTES)) return
+            val queryBytes =
+                packet.copyOfRange(ip.payloadOffset, ip.payloadOffset + ip.payloadLength)
+            val dns = DnsPacket.parse(queryBytes, queryBytes.size) ?: return
+            if (dns.isResponse) return
+            val lists = filterLists ?: return
+            if (!lists.isBlocked(dns.questionName)) return
+            if (logEnabled) {
+                queryLog.record(dns.questionName, true, System.currentTimeMillis())
+            }
+            blockedCount.incrementAndGet()
+            writeResponse(output, IpUdpPacket.buildResponse(ip, dns.buildSinkholeResponse()))
+        } catch (e: Exception) {
+            // TUN going away or a malformed packet: nothing safe
+            // to answer with, and a wrong answer is worse.
         }
     }
 
@@ -555,24 +841,42 @@ class SphinxVpnService : VpnService() {
             if (dns.isResponse) return
 
             val lists = filterLists ?: return
-            val blocked = lists.isBlocked(dns.questionName)
-            if (logEnabled) {
-                queryLog.record(dns.questionName, blocked, System.currentTimeMillis())
-            }
-            if (blocked) {
-                blockedCount.incrementAndGet()
-                writeResponse(output, IpUdpPacket.buildResponse(ip, dns.buildSinkholeResponse()))
-            } else {
-                // Count at the decision, per FILTER-SPEC.md ("allowed
-                // (forwarded)") — an upstream failure must not make a
-                // let-through query vanish from both counters.
-                allowedCount.incrementAndGet()
-                val answer = forward(queryBytes)
-                if (answer != null) {
-                    writeResponse(output, IpUdpPacket.buildResponse(ip, answer))
+            // The decision itself lives in the shared DnsPipeline
+            // (core), so the FILTER path and the TUNNEL+Blocker
+            // gate can never drift apart: listed → sinkhole at
+            // once; unlisted → forward() below, which feeds the
+            // shared DnsForwarder the fixed upstream chain (the
+            // public head plus the phone's own DNS as its floor)
+            // — never a tunnel-side fork of the forwarder.
+            val pipeline = DnsPipeline(lists) { q -> forward(q) }
+            when (val result = pipeline.processQuery(queryBytes)) {
+                is DnsPipeline.Result.Sinkholed -> {
+                    if (logEnabled) {
+                        queryLog.record(result.name, true, System.currentTimeMillis())
+                    }
+                    blockedCount.incrementAndGet()
+                    writeResponse(output, IpUdpPacket.buildResponse(ip, result.response))
                 }
-                // No answer from any upstream: leave the query unanswered
-                // and let the asking app retry, per FILTER-SPEC.md.
+                is DnsPipeline.Result.Forwarded -> {
+                    if (logEnabled) {
+                        queryLog.record(result.name, false, System.currentTimeMillis())
+                    }
+                    allowedCount.incrementAndGet()
+                    writeResponse(output, IpUdpPacket.buildResponse(ip, result.response))
+                }
+                is DnsPipeline.Result.Unanswered -> {
+                    // Count at the decision, per FILTER-SPEC.md
+                    // ("allowed (forwarded)") — an upstream
+                    // failure must not make a let-through query
+                    // vanish from both counters. No answer from
+                    // any upstream: leave the query unanswered
+                    // and let the asking app retry, per
+                    // FILTER-SPEC.md.
+                    if (logEnabled) {
+                        queryLog.record(dns.questionName, false, System.currentTimeMillis())
+                    }
+                    allowedCount.incrementAndGet()
+                }
             }
         } catch (e: Exception) {
             // Dropped. Hostile input ends here, quietly.
@@ -616,6 +920,17 @@ class SphinxVpnService : VpnService() {
     }
 
     private fun shutdown() {
+        // A tunnel, if one is up, comes down with the service —
+        // through the controller, never left half-armed. (The
+        // ACTION_STOP path for a tunnel goes through stopTunnel,
+        // which also handles the return to the pre-VPN mode;
+        // this covers onDestroy/onRevoke and filter starts.)
+        if (tunnelActive) {
+            tunnelPollThread?.interrupt()
+            tunnelPollThread = null
+            tunnelController?.disconnect()
+            clearTunnelFlags()
+        }
         running = false
         isRunning = false
         // The filter is off from here: record it. (A restart calls

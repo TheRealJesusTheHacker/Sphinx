@@ -92,7 +92,7 @@ class FilterPassThroughConformanceTest {
             val pipeline = DnsPipeline(lists()) { q ->
                 DnsForwarder.forwardQuery(
                     q,
-                    resolvers = listOf("127.0.0.1"),
+                    resolvers = listOf(InetAddress.getByName("127.0.0.1")),
                     timeoutMs = 2000,
                     port = upstream.localPort,
                 )
@@ -142,10 +142,18 @@ class FilterPassThroughConformanceTest {
             }
         }
         try {
+            // Pin the chain order: the forwarder's responder
+            // affinity is process-wide, and this test's point is
+            // the FIRST entry failing — reset it (the fix crew's
+            // own test hook) so affinity cannot reorder first.
+            DnsForwarder.resetLastResponder()
             val pipeline = DnsPipeline(lists()) { q ->
                 DnsForwarder.forwardQuery(
                     q,
-                    resolvers = listOf("127.0.0.1", "127.0.0.2"),
+                    resolvers = listOf(
+                        InetAddress.getByName("127.0.0.1"),
+                        InetAddress.getByName("127.0.0.2"),
+                    ),
                     timeoutMs = 600,
                     port = port,
                 )

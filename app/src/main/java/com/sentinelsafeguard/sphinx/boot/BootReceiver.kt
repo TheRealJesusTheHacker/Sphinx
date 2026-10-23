@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import com.sentinelsafeguard.sphinx.lists.ListStore
+import com.sentinelsafeguard.sphinx.lists.TunnelStore
 import com.sentinelsafeguard.sphinx.vpn.SphinxVpnService
 
 /**
@@ -26,6 +27,17 @@ import com.sentinelsafeguard.sphinx.vpn.SphinxVpnService
  * The start goes through the service's ordinary ACTION_START path,
  * so the booted filter runs exactly the lifecycle (and the capture
  * mode, from the stored rules) that a manual start produces.
+ *
+ * TUNNEL modes join the same discipline (docs/TUNNEL-SPEC.md):
+ * if the tunnel's own intent record is on, boot resumes the
+ * TUNNEL shape instead — through its ordinary start action, and
+ * the service re-proves the handshake before anything claims
+ * "connected". Tunnel intent and filter intent are exclusive
+ * modes; the tunnel record is checked first because a tunnel
+ * session's pre-VPN mode may itself have been the filter. A
+ * leftover record (its profile deleted) is handled by the
+ * service as a leftover: surfaced in the app, never silently
+ * taken over.
  */
 class BootReceiver : BroadcastReceiver() {
 
@@ -33,14 +45,23 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
         val store = ListStore(context)
         if (!store.bootAutoStartEnabled()) return
-        if (!store.filterOnIntent()) return
+        val tunnelState = TunnelStore(context).tunnelState()
+        val tunnelArmed = tunnelState.intentOn
+        if (!tunnelArmed && !store.filterOnIntent()) return
         // No consent in place → do nothing. prepare() returns the
         // consent intent when Sphinx is not currently the approved
         // VPN; showing it from a boot receiver is not possible and
         // not wanted.
         if (VpnService.prepare(context) != null) return
         val start = Intent(context, SphinxVpnService::class.java)
-            .setAction(SphinxVpnService.ACTION_START)
+            .setAction(
+                when {
+                    tunnelArmed && tunnelState.withBlocker ->
+                        SphinxVpnService.ACTION_START_TUNNEL_BLOCKER
+                    tunnelArmed -> SphinxVpnService.ACTION_START_TUNNEL
+                    else -> SphinxVpnService.ACTION_START
+                }
+            )
         try {
             context.startForegroundService(start)
         } catch (e: Exception) {

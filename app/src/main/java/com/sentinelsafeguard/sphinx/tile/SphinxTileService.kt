@@ -51,7 +51,17 @@ class SphinxTileService : TileService() {
     override fun onClick() {
         super.onClick()
         val consentGranted = VpnService.prepare(this) == null
-        when (FilterTileLogic.onTap(SphinxVpnService.isRunning, consentGranted)) {
+        when (FilterTileLogic.onTap(
+            SphinxVpnService.isRunning, consentGranted, SphinxVpnService.tunnelActive,
+        )) {
+            FilterTileLogic.TapAction.STOP_TUNNEL -> {
+                // The ordinary stop path: the service tears the
+                // tunnel down and returns to the pre-VPN mode.
+                startService(
+                    Intent(this, SphinxVpnService::class.java)
+                        .setAction(SphinxVpnService.ACTION_STOP)
+                )
+            }
             FilterTileLogic.TapAction.STOP_FILTER -> {
                 startService(
                     Intent(this, SphinxVpnService::class.java)
@@ -104,16 +114,18 @@ class SphinxTileService : TileService() {
     private fun updateTile() {
         val tile = qsTile ?: return
         val running = SphinxVpnService.isRunning
-        tile.state = when (FilterTileLogic.tileState(running)) {
+        val tunnelActive = SphinxVpnService.tunnelActive
+        tile.state = when (FilterTileLogic.tileState(running, tunnelActive)) {
             FilterTileLogic.TileState.ACTIVE -> Tile.STATE_ACTIVE
             FilterTileLogic.TileState.INACTIVE -> Tile.STATE_INACTIVE
         }
         tile.label = getString(R.string.app_name)
         tile.icon = Icon.createWithResource(this, R.drawable.ic_sphinx)
         val status = getString(
-            when (FilterTileLogic.statusText(running)) {
+            when (FilterTileLogic.statusText(running, tunnelActive)) {
                 FilterTileLogic.StatusText.ON -> R.string.status_on
                 FilterTileLogic.StatusText.OFF -> R.string.status_off
+                FilterTileLogic.StatusText.VPN_ON -> R.string.status_tunnel_tile
             }
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

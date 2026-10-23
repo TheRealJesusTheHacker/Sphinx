@@ -231,7 +231,7 @@ class DnsPipeline(
     fun processQuery(queryBytes: ByteArray): Result {
         val dns = DnsPacket.parse(queryBytes, queryBytes.size)
             ?: return Result.Unanswered(null)
-        if (dns.isResponse) return Result.Unanswered(dns.questionName)
+        if (dns.isResponse) return Result.Unanswered(null)
         if (lists.isBlocked(dns.questionName)) {
             return Result.Sinkholed(dns.questionName, dns.buildSinkholeResponse())
         }

@@ -92,6 +92,50 @@
     <string name="button_battery_settings">Open battery settings…</string>
     <string name="battery_settings_failed">Couldn\'t open Android\'s battery settings from here.</string>
 
+    <!-- VPN mode / TUNNEL (TUNNEL-SPEC) -->
+    <string name="section_vpn">VPN mode — your server</string>
+    <string name="vpn_disclosure">In VPN mode, your traffic passes through the server you choose — that\'s how a VPN works. Sphinx ships no servers of its own in your list; a profile is a server you added or one your provider gave you. Choosing a server is trusting its operator with your traffic. A VPN changes the address the world sees; it does not make you anonymous.</string>
+    <string name="vpn_status_off">VPN is off.</string>
+    <string name="vpn_status_connected">VPN on — %1$s</string>
+    <string name="vpn_status_connecting">VPN is starting — not connected until the server answers a handshake.</string>
+    <string name="vpn_status_kill_switch">VPN disconnected — traffic is blocked, not going around the tunnel. Reconnect, or disconnect on purpose to go back to how things were before VPN.</string>
+    <string name="vpn_status_blocker_on">Ad blocking is on in this VPN mode.</string>
+    <string name="vpn_status_unfiltered">Ads are not blocked in this mode — DNS goes to your server\'s resolvers through the tunnel, unfiltered.</string>
+    <string name="vpn_scope_all">This profile routes all traffic through the server.</string>
+    <string name="vpn_scope_some">This profile routes some traffic through the server — a split tunnel. Only the addresses in the profile go through it; the rest of your traffic does not.</string>
+    <string name="vpn_profiles_empty">No servers yet. Add your server: paste its WireGuard config, pick the config file, scan a QR code of the config, or create a profile here with keys generated on this phone.</string>
+    <string name="vpn_paste_hint">Paste a WireGuard config ([Interface] / [Peer]) or an OpenVPN config</string>
+    <string name="button_vpn_import_paste">Import pasted config</string>
+    <string name="button_vpn_import_file">Import config file…</string>
+    <string name="button_vpn_import_qr">Import QR image…</string>
+    <string name="button_vpn_new">New profile with keys generated here…</string>
+    <string name="button_vpn_connect">Connect — VPN only</string>
+    <string name="button_vpn_connect_blocker">Connect — VPN + ad blocking</string>
+    <string name="button_vpn_disconnect">Disconnect VPN</string>
+    <string name="button_vpn_export">Export selected profile…</string>
+    <string name="button_vpn_delete">Delete selected profile</string>
+    <string name="button_vpn_exclude">Apps that bypass the tunnel…</string>
+    <string name="vpn_exclude_truth">Apps you exclude here bypass the tunnel entirely — their traffic leaves this phone directly, with your real address, and in VPN + ad blocking mode their DNS is not filtered either. They never enter the tunnel.</string>
+    <string name="vpn_return_note">Disconnecting returns to the mode you had before VPN — blocker only, or off.</string>
+    <string name="vpn_openvpn_note">OpenVPN profile — stored and labeled. Connecting it is refused in this version (see the profile for the reason).</string>
+    <string name="vpn_imported">Profile imported.</string>
+    <string name="vpn_import_failed">That config was refused: %1$s. Nothing was imported and your other profiles are unchanged.</string>
+    <string name="vpn_deleted">Profile deleted. Your other profiles are unchanged.</string>
+    <string name="vpn_qr_failed">No QR code could be read from that image. Nothing was imported.</string>
+    <string name="vpn_file_failed">That file could not be read as a config. Nothing was imported.</string>
+    <string name="vpn_new_title">New server profile</string>
+    <string name="vpn_new_message">Sphinx generates this phone\'s keypair here, on the phone — the private key never leaves it except in an export you make yourself. Give the matching public key to your server operator; Sphinx shows it after the profile is created. Fields: name, server public key, endpoint (host:port), this phone\'s tunnel address (like 10.8.0.2/32), DNS (optional, comma-separated).</string>
+    <string name="vpn_new_created">Profile created. This phone\'s public key for it: %1$s — give that to your server operator so the server will answer this phone.</string>
+    <string name="vpn_export_title">Export profile</string>
+    <string name="vpn_export_note">This export contains the profile\'s private key. It is shown and shared only because you asked — treat it like a password.</string>
+    <string name="button_vpn_share_export">Share config text…</string>
+    <string name="vpn_always_on_label">Android\'s always-on VPN and \"block connections without VPN\" settings are yours to set — Sphinx shows them, never changes them, and claims no stronger guarantee than Android gives.</string>
+    <string name="button_vpn_always_on">Open Android VPN settings…</string>
+    <string name="vpn_always_on_failed">Couldn\'t open Android\'s VPN settings from here.</string>
+    <string name="button_vpn_notices">Third-party notices &amp; licenses</string>
+    <string name="vpn_notices_title">Bundled components — licenses</string>
+    <string name="status_tunnel_tile">VPN on</string>
+
     <!-- Query log (Phase 2) -->
     <string name="section_log">Query log</string>
     <string name="log_explainer">The most recent lookups Sphinx questioned — kept only in memory on this phone, never sent anywhere, and gone when the app\'s process stops. Recording is on by default so you can see Sphinx working; turn it off any time.</string>
