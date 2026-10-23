@@ -186,7 +186,12 @@ shipped editions. It is **not** in any release yet, for one plain reason:
 a public release APK must be signed with the owner's release
 keystore, and that key does not exist yet. The Android APK joins
 a release as soon as that one owner step is done; no
-debug-signed build ships in its place.
+debug-signed build ships in its place. The edition's unit-test
+suite has since been run end-to-end — 115 tests, all passing,
+also green through Gradle in CI — and the signed-release path
+is wired into the repo, fail-closed: it refuses to produce a
+signed APK until the owner's keystore secrets are present, so
+the keystore really is the only step left.
 
 Fixes landed on `main` after the v1.0.0 commit — the
 quick-settings tile, truncated-answer completion over TCP, the
