@@ -4,12 +4,16 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
@@ -19,6 +23,17 @@ import org.junit.Test
  * answers (RFC 7766), and the receive-buffer size.
  */
 class ForwarderTest {
+
+    private val loopback: InetAddress = InetAddress.getByName("127.0.0.1")
+    private val deadEndA: InetAddress = InetAddress.getByName("127.0.0.2")
+    private val deadEndB: InetAddress = InetAddress.getByName("127.0.0.3")
+
+    /** Affinity is process-wide state in the forwarder; no test
+     *  may inherit another test's last responder. */
+    @Before
+    fun resetAffinity() {
+        DnsForwarder.resetLastResponder()
+    }
 
     private fun query(name: String, id: Int = 0x1234): ByteArray {
         val out = ArrayList<Byte>()
@@ -75,7 +90,7 @@ class ForwarderTest {
         val fake = fakeUdp()
         val q = query("example.com")
         fake.start { s, data, addr, port -> sendTo(s, response(data), addr, port) }
-        val answer = DnsForwarder.forwardQuery(q, listOf("127.0.0.1"), 2000, fake.port)
+        val answer = DnsForwarder.forwardQuery(q, listOf(loopback), 2000, fake.port)
         assertNotNull(answer)
         assertEquals(0x1234, ((answer!![0].toInt() and 0xFF) shl 8) or (answer[1].toInt() and 0xFF))
     }
@@ -90,7 +105,7 @@ class ForwarderTest {
             sendTo(s, spoof, addr, port)
             sendTo(s, response(data), addr, port)
         }
-        val answer = DnsForwarder.forwardQuery(q, listOf("127.0.0.1"), 2000, fake.port)
+        val answer = DnsForwarder.forwardQuery(q, listOf(loopback), 2000, fake.port)
         assertNotNull(answer)
         assertEquals(0x1234, ((answer!![0].toInt() and 0xFF) shl 8) or (answer[1].toInt() and 0xFF))
     }
@@ -101,7 +116,7 @@ class ForwarderTest {
         val port = fake.port
         fake.socket.close()
         val q = query("example.com")
-        val answer = DnsForwarder.forwardQuery(q, listOf("127.0.0.1", "127.0.0.1"), 300, port)
+        val answer = DnsForwarder.forwardQuery(q, listOf(loopback, loopback), 300, port)
         assertNull(answer)
     }
 
@@ -137,7 +152,7 @@ class ForwarderTest {
                 tcp.close()
             }
         }
-        val answer = DnsForwarder.forwardQuery(q, listOf("127.0.0.1"), 3000, fake.port)
+        val answer = DnsForwarder.forwardQuery(q, listOf(loopback), 3000, fake.port)
         server.join(2000)
         assertNotNull(answer)
         assertArrayEquals(full, answer)
@@ -154,7 +169,7 @@ class ForwarderTest {
         }
         // Nothing listens on TCP at this port, so the exchange fails
         // and the truncated datagram is handed back, as in Python.
-        val answer = DnsForwarder.forwardQuery(q, listOf("127.0.0.1"), 3000, fake.port)
+        val answer = DnsForwarder.forwardQuery(q, listOf(loopback), 3000, fake.port)
         assertNotNull(answer)
         assertArrayEquals(truncated, answer)
     }
@@ -191,7 +206,7 @@ class ForwarderTest {
                 tcp.close()
             }
         }
-        val answer = DnsForwarder.forwardQuery(q, listOf("127.0.0.1"), 3000, fake.port)
+        val answer = DnsForwarder.forwardQuery(q, listOf(loopback), 3000, fake.port)
         server.join(2000)
         assertArrayEquals(truncated, answer)
     }
@@ -203,7 +218,7 @@ class ForwarderTest {
         fake.start { s, data, addr, port -> sendTo(s, response(data), addr, port) }
         // No TCP listener exists; a correct forwarder never needs one
         // for a non-truncated answer.
-        val answer = DnsForwarder.forwardQuery(q, listOf("127.0.0.1"), 2000, fake.port)
+        val answer = DnsForwarder.forwardQuery(q, listOf(loopback), 2000, fake.port)
         assertArrayEquals(response(q), answer)
     }
 
@@ -229,7 +244,7 @@ class ForwarderTest {
             // receive run a full timeout past the deadline.
         }
         val start = System.nanoTime()
-        val answer = DnsForwarder.forwardQuery(q, listOf("127.0.0.1"), 2000, fake.port)
+        val answer = DnsForwarder.forwardQuery(q, listOf(loopback), 2000, fake.port)
         val elapsedMs = (System.nanoTime() - start) / 1_000_000
         assertNull(answer)
         assertTrue(
@@ -251,9 +266,126 @@ class ForwarderTest {
         val q = query("example.com")
         val big = response(q, totalSize = 40000)
         fake.start { s, data, addr, port -> sendTo(s, response(data, totalSize = 40000), addr, port) }
-        val answer = DnsForwarder.forwardQuery(q, listOf("127.0.0.1"), 3000, fake.port)
+        val answer = DnsForwarder.forwardQuery(q, listOf(loopback), 3000, fake.port)
         assertNotNull(answer)
         assertEquals(40000, answer!!.size)
         assertArrayEquals(big, answer)
+    }
+
+    // --- SEV-1 (2026-10-23): the chain's floor, checked protection,
+    // and affinity. On the owner's phone the shipped chain was the
+    // two public resolvers and nothing else, and protect()'s result
+    // was discarded: when both literals were dead ends from the
+    // forwarding socket, every unlisted name failed while the
+    // phone's own DNS (filter off) answered them all. These tests
+    // pin the three behaviors that close that failure. ---
+
+    @Test
+    fun upstreamChainPutsPublicsFirstThenSystemServersDeduped() {
+        val systemV6 = InetAddress.getByName("2001:db8::53")
+        val chain = DnsForwarder.upstreamChain(
+            listOf(systemV6, loopback, InetAddress.getByName("1.1.1.1")),
+        )
+        assertEquals(
+            listOf("1.1.1.1", "9.9.9.9", "2001:db8::53", "127.0.0.1"),
+            chain.map { it.hostAddress },
+        )
+    }
+
+    @Test(timeout = 20000)
+    fun chainFallsThroughDeadUpstreamsToTheSystemServer() {
+        val fake = fakeUdp() // the "system" resolver: it answers
+        val q = query("unlisted.example")
+        fake.start { s, data, addr, port -> sendTo(s, response(data), addr, port) }
+        // Two dead ends ahead of it in the chain — nothing listens
+        // on those loopback aliases, so each attempt fails (ICMP
+        // unreachable on a connected socket, or the attempt's own
+        // budget) and the walk must still reach the floor.
+        val chain = listOf(deadEndA, deadEndB, loopback)
+        val answer = DnsForwarder.forwardQuery(q, chain, 1200, fake.port)
+        assertNotNull(answer)
+        assertEquals(0x1234, ((answer!![0].toInt() and 0xFF) shl 8) or (answer[1].toInt() and 0xFF))
+    }
+
+    @Test(timeout = 15000)
+    fun protectRefusalSendsNothing() {
+        val fake = fakeUdp()
+        val arrived = CountDownLatch(1)
+        fake.start { s, data, addr, port ->
+            arrived.countDown()
+            sendTo(s, response(data), addr, port)
+        }
+        val q = query("protected.example")
+        val answer = DnsForwarder.forwardQuery(
+            q, listOf(loopback), 1000, fake.port,
+            protectUdp = { false }, // the platform refused protection
+        )
+        assertNull(answer)
+        assertTrue(
+            "a query left on a socket the platform refused to protect",
+            !arrived.await(700, TimeUnit.MILLISECONDS),
+        )
+    }
+
+    @Test
+    fun tcpCompletionSkippedWhenTcpProtectRefused() {
+        val fake = fakeUdp()
+        var truncated: ByteArray? = null
+        fake.start { s, data, addr, port ->
+            truncated = response(data, truncated = true)
+            sendTo(s, truncated!!, addr, port)
+        }
+        // No TCP listener exists either; with protection refused
+        // the TCP exchange must not even be attempted, and the
+        // truncated datagram is handed back as designed.
+        val answer = DnsForwarder.forwardQuery(
+            query("big.example.com"), listOf(loopback), 2000, fake.port,
+            protectTcp = { false },
+        )
+        assertNotNull(answer)
+        assertArrayEquals(truncated, answer)
+    }
+
+    @Test(timeout = 20000)
+    fun lastResponderIsTriedFirstOnNextQuery() {
+        val q = query("affinity.example")
+        // One port, two loopback aliases: the dead end counts what
+        // reaches it and never answers; the system server answers.
+        val deadSocket = DatagramSocket(0, deadEndA)
+        val port = deadSocket.localPort
+        val deadArrivals = AtomicInteger(0)
+        val deadThread = thread(isDaemon = true) {
+            try {
+                val buf = ByteArray(65535)
+                while (true) {
+                    val packet = DatagramPacket(buf, buf.size)
+                    deadSocket.receive(packet)
+                    deadArrivals.incrementAndGet()
+                }
+            } catch (e: Exception) {
+                // Socket closed at test end.
+            }
+        }
+        try {
+            val good1 = FakeUdp(DatagramSocket(port, loopback))
+            val t1 = good1.start { s, data, addr, p -> sendTo(s, response(data), addr, p) }
+            val first = DnsForwarder.forwardQuery(q, listOf(deadEndA, loopback), 1200, port)
+            t1.join(2000)
+            assertNotNull(first)
+            assertEquals(1, deadArrivals.get())
+
+            // Second query, same chain: affinity must take it
+            // straight to the responder — the dead end sees nothing.
+            val good2 = FakeUdp(DatagramSocket(port, loopback))
+            val t2 = good2.start { s, data, addr, p -> sendTo(s, response(data), addr, p) }
+            val second = DnsForwarder.forwardQuery(q, listOf(deadEndA, loopback), 1200, port)
+            t2.join(2000)
+            assertNotNull(second)
+            Thread.sleep(300) // grace for a wrongly-sent datagram to land
+            assertEquals(1, deadArrivals.get())
+        } finally {
+            deadSocket.close()
+            deadThread.join(2000)
+        }
     }
 }
