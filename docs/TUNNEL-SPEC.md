@@ -38,6 +38,43 @@ Hard rules that follow:
   and cannot separate. YouTube's ads still come from YouTube's
   servers, tunnel or no tunnel.
 
+## The filter questions names; it does not block traffic
+
+Owner's standing criterion, stated 2026-10-23 while testing
+("make sure it doesn't block all network traffic just ads"):
+**Sphinx filters ad/tracker name lookups; it does not block
+general traffic.** This governs every mode in this spec and
+reaffirms FILTER-SPEC program-wide:
+
+- In **Blocker** and **VPN + Blocker** modes, the filter's
+  only action is the DNS decision: listed names get the
+  sinkhole answer; **every unlisted name resolves normally
+  and its traffic passes untouched** — including names that
+  merely look tracker-adjacent but are not listed. Listing
+  is the whole test; resemblance is not evidence.
+- A blocked name fails **fast and clean**: the sinkhole
+  answer is immediate, and no query path may hang or stall
+  in a way that makes an app look offline. A refusal is a
+  refusal, delivered at once — never a timeout by another
+  name.
+- In **VPN** modes the tunnel carries all covered traffic to
+  the chosen server by design (that is the location change).
+  The only blocking that exists anywhere in tunnel modes is
+  (a) the DNS filter decisions above, in VPN + Blocker, and
+  (b) the kill-switch state on tunnel failure — which
+  announces itself in plain language and offers the one-tap
+  intentional disconnect, exactly as specified below. **No
+  silent full-block state may exist in any mode.**
+- Android's app-block total-drop behavior stays quarantined
+  to that explicit, user-chosen mode. It never leaks into
+  FILTER or TUNNEL defaults, and no mode transition may
+  inherit it.
+- **Conformance:** each edition proves this with a named
+  test — an unlisted name resolves *and* its traffic passes
+  with the filter on (blocker path, and the VPN + Blocker
+  path where the edition implements it). An edition without
+  that proof has not finished this section.
+
 ## Server profiles
 
 A **server profile** is the unit of the picker: one named server
