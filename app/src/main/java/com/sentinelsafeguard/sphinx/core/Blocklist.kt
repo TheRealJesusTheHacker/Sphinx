@@ -57,13 +57,31 @@ class Blocklist(entries: Collection<String>) {
          * custom-entry field), so an entry that would be dropped at
          * load time is refused at entry time instead of silently
          * doing nothing.
+         *
+         * An entry must also be a name that could ever arrive in a
+         * DNS query: labels are at most [MAX_LABEL_LENGTH] characters
+         * and the whole name at most [MAX_NAME_LENGTH] (the wire
+         * format's own limits, which the query parser enforces on
+         * names it reads). An "entry" past those limits can never
+         * match anything — it is junk weight, and counting it toward
+         * the list sanity gate (ListValidation) would let a padded
+         * download pass the gate with names that block nothing.
          */
         fun normalizeEntry(raw: String?): String? {
             val name = normalize(raw) ?: return null
             if ('.' !in name) return null
             if (name in RESERVED_NAMES) return null
+            if (name.length > MAX_NAME_LENGTH) return null
+            if (name.split('.').any { it.length > MAX_LABEL_LENGTH }) return null
             return name
         }
+
+        /** The longest label a DNS name may hold (RFC 1035 §2.3.4). */
+        const val MAX_LABEL_LENGTH = 63
+
+        /** The longest textual DNS name, without a trailing dot
+         *  (RFC 1035 §2.3.4: 255 wire octets including the root). */
+        const val MAX_NAME_LENGTH = 253
 
         private val DOMAIN_SHAPE =
             Regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")

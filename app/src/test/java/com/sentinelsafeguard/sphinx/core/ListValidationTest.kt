@@ -79,6 +79,16 @@ class ListValidationTest {
     }
 
     @Test
+    fun theGateCannotBePaddedWithUnmatchableEntries() {
+        // 5,000 lines of entries no DNS query can ever carry (a
+        // 64-character label): they parse to zero real domains, so
+        // the download must fail the sanity gate instead of passing
+        // it on names that would block nothing.
+        val padded = (1..5_000).asSequence().map { "${"a".repeat(64)}$it.example.com" }
+        assertNull(ListValidation.parseAndValidate(padded))
+    }
+
+    @Test
     fun defaultSourcesAreHttpsAndReputable() {
         assertTrue(ListValidation.DEFAULT_MIN_DOMAINS >= 1_000)
         assertTrue(ListSource.DEFAULTS.isNotEmpty())

@@ -159,6 +159,38 @@ class BlocklistTest {
     }
 
     @Test
+    fun normalizeEntryRejectsNamesThatCanNeverArriveOnTheWire() {
+        // A DNS label is at most 63 characters and a whole name at
+        // most 253: past those limits the query parser can never
+        // produce the name, so the "entry" could never match — it
+        // must be refused at entry time, not stored as dead weight.
+        val label64 = "a".repeat(64)
+        assertEquals(null, Blocklist.normalizeEntry("$label64.example.com"))
+        val label63 = "a".repeat(63)
+        assertEquals("$label63.com", Blocklist.normalizeEntry("$label63.com"))
+
+        // 63+1+63+1+63+1+61 = 253 characters: the longest legal name.
+        val longest = "$label63.$label63.$label63.${"a".repeat(61)}"
+        assertEquals(253, longest.length)
+        assertEquals(longest, Blocklist.normalizeEntry(longest))
+        val tooLong = "$label63.$label63.$label63.${"a".repeat(62)}"
+        assertEquals(254, tooLong.length)
+        assertEquals(null, Blocklist.normalizeEntry(tooLong))
+    }
+
+    @Test
+    fun fromLinesDropsOversizedEntries() {
+        val list = Blocklist.fromLines(
+            sequenceOf(
+                "${"a".repeat(64)}.example.com",
+                "real.example.com",
+            )
+        )
+        assertEquals(1, list.size)
+        assertTrue(list.isBlocked("real.example.com"))
+    }
+
+    @Test
     fun fromLinesDeduplicates() {
         val list = Blocklist.fromLines(
             sequenceOf(
