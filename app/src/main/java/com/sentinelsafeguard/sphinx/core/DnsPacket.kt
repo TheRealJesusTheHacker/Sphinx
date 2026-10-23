@@ -24,6 +24,14 @@ class DnsPacket private constructor(
     val questionClass: Int,
     /** Offset just past the end of the question section. */
     val questionEnd: Int,
+    /** Header counts beyond the question (fix2 hunt): what the
+     *  asker attached — authority and additional records, the
+     *  additional section being where an EDNS OPT record rides.
+     *  The filter forwards queries unchanged, so these never
+     *  change its decisions; they exist so diagnostics and tests
+     *  can speak about real wire shapes instead of toy ones. */
+    val authorityCount: Int,
+    val additionalCount: Int,
     private val raw: ByteArray,
     private val rawLength: Int,
 ) {
@@ -57,6 +65,8 @@ class DnsPacket private constructor(
                 questionType = qType,
                 questionClass = qClass,
                 questionEnd = afterName + 4,
+                authorityCount = u16(data, 8),
+                additionalCount = u16(data, 10),
                 raw = data,
                 rawLength = length,
             )

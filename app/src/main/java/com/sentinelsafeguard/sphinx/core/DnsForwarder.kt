@@ -113,7 +113,22 @@ object DnsForwarder {
     /** Send a DNS query to the upstream chain; null if all fail.
      *  The [protectUdp]/[protectTcp] hooks must return the
      *  platform's verdict: false means the socket could not be
-     *  protected from the VPN, and it is then not used at all. */
+     *  protected from the VPN, and it is then not used at all.
+     *
+     *  Fix2 hunt additions (2026-10-23), same checked-precondition
+     *  discipline as protection:
+     *  - [bindUdp] pins the socket to the network the resolver
+     *    came from, before anything is sent. A resolver that only
+     *    exists on its own network — a link-local or scoped
+     *    carrier address, a DNS64 synthesizer — is unreachable
+     *    from an unbound socket no matter how healthy the phone's
+     *    own resolution is, and an unbound attempt fails exactly
+     *    like a dead resolver: silence. False means the bind was
+     *    refused and the socket is not used.
+     *  - [onOutcome] reports each attempt's end (see
+     *    [UpstreamHealth]) so the diagnostics screen can show
+     *    what the chain actually did, per resolver, instead of
+     *    the filter merely claiming to run. */
     fun forwardQuery(
         query: ByteArray,
         resolvers: List<InetAddress> = UPSTREAM_RESOLVERS,
@@ -121,6 +136,8 @@ object DnsForwarder {
         port: Int = DNS_PORT,
         protectUdp: (DatagramSocket) -> Boolean = { true },
         protectTcp: (java.net.Socket) -> Boolean = { true },
+        bindUdp: (DatagramSocket, InetAddress) -> Boolean = { _, _ -> true },
+        onOutcome: (InetAddress, UpstreamHealth.Outcome, Long) -> Unit = { _, _, _ -> },
     ): ByteArray? {
         if (query.size < 2) return null
         val queryId = ((query[0].toInt() and 0xFF) shl 8) or (query[1].toInt() and 0xFF)
@@ -135,14 +152,29 @@ object DnsForwarder {
             }
         for (resolver in ordered) {
             var socket: DatagramSocket? = null
+            val attemptStartNanos = System.nanoTime()
+            var outcomeRecorded = false
             try {
                 socket = DatagramSocket()
+                if (!bindUdp(socket, resolver)) {
+                    // Binding refused: this resolver lives on a
+                    // network this socket could not be pinned to.
+                    // Sending anyway would aim the query at
+                    // whichever network the default route picks —
+                    // where the address may mean nothing, or worse,
+                    // something else. Skip it unsent.
+                    onOutcome(resolver, UpstreamHealth.Outcome.BIND_REFUSED, -1)
+                    outcomeRecorded = true
+                    continue
+                }
                 if (!protectUdp(socket)) {
                     // Protection refused: sending anyway would
                     // loop the query back into the filter's own
                     // TUN, where it dies silently. Skip this
                     // resolver without putting a byte on the wire;
                     // the finally below closes the socket.
+                    onOutcome(resolver, UpstreamHealth.Outcome.PROTECT_REFUSED, -1)
+                    outcomeRecorded = true
                     continue
                 }
                 socket.soTimeout = timeoutMs
@@ -187,6 +219,10 @@ object DnsForwarder {
                                 query, resolver, deadlineNanos, port, protectTcp,
                             )
                             lastResponder = resolver
+                            onOutcome(
+                                resolver, UpstreamHealth.Outcome.ANSWERED,
+                                (System.nanoTime() - attemptStartNanos) / 1_000_000L,
+                            )
                             return if (full != null && isAnswer(full, full.size, queryId)) {
                                 full
                             } else {
@@ -194,6 +230,10 @@ object DnsForwarder {
                             }
                         }
                         lastResponder = resolver
+                        onOutcome(
+                            resolver, UpstreamHealth.Outcome.ANSWERED,
+                            (System.nanoTime() - attemptStartNanos) / 1_000_000L,
+                        )
                         return accepted
                     }
                     // Not our answer: ignore it and keep waiting —
@@ -203,6 +243,9 @@ object DnsForwarder {
                 // Timeout or socket error: try the next resolver.
             } finally {
                 socket?.close()
+            }
+            if (!outcomeRecorded) {
+                onOutcome(resolver, UpstreamHealth.Outcome.TIMED_OUT_OR_ERROR, -1)
             }
         }
         return null
