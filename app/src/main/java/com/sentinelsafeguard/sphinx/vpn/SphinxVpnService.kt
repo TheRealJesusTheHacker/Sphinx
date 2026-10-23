@@ -286,14 +286,29 @@ class SphinxVpnService : VpnService() {
                 if (name != null && requestId > 0) {
                     Thread({ runProbe(requestId, name) }, "sphinx-diagnostics-probe").start()
                 }
-                return START_NOT_STICKY
+                // Stickiness is the running filter's, not this
+                // intent's (see ACTION_RELOAD_LISTS below).
+                return if (running) START_STICKY else START_NOT_STICKY
             }
             ACTION_RELOAD_LISTS -> {
                 // A list update, an allowlist edit, or a settings
                 // change: reload in the background and swap when ready.
                 // Never starts the filter by itself.
                 Thread({ reloadListsNow() }, "sphinx-list-reloader").start()
-                return START_NOT_STICKY
+                // The return value declares how the system treats
+                // THIS service if it kills the process: Android
+                // applies the mode from the most recent
+                // onStartCommand call, so an unconditional
+                // START_NOT_STICKY here would silently downgrade a
+                // running filter — after a system kill it would
+                // not be restarted, and protection would end
+                // without ever having been turned off (Lane B
+                // surface hunt, relayed 2026-10-23; the same
+                // reasoning ACTION_RESTART's not-running branch
+                // already applies in mirror image). A reload of a
+                // running filter keeps its stickiness; a reload
+                // with nothing running claims nothing.
+                return if (running) START_STICKY else START_NOT_STICKY
             }
             ACTION_RESTART -> {
                 // A rule change on a running filter: rebuild the
