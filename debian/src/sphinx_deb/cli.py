@@ -38,6 +38,14 @@ from . import __version__, daemon, paths
 from .control import ControlClient, control_socket_path
 from .core.blocklist import Blocklist, normalize_entry
 from .core.store import Store
+from .core.tunnel import (
+    REFUSAL_TEXT,
+    TunnelRefusal,
+    build_wireguard_text,
+    parse_config,
+    server_peer_stanza,
+)
+from .core.tunnelstore import TunnelStore
 from .core.updater import ListUpdater
 from .resolver.guard import (
     DnsGuard,
@@ -48,6 +56,7 @@ from .resolver.guard import (
 )
 from .resolver.proof import WireProofer
 from .resolver.systemview import RealSystemView
+from .tunnel.guard import RealTunnelRunner, TunnelGuard, TunnelState
 
 EXIT_OK = 0
 EXIT_REFUSED = 2
@@ -367,6 +376,293 @@ def _lists_line(stats: Optional[dict]) -> str:
     )
 
 
+
+def _tunnel_store() -> TunnelStore:
+    return TunnelStore(paths.state_dir())
+
+
+def _dns_restore_for_tunnel():
+    """The tunnel teardown's second half: the existing DNS restore
+    path, untouched, run only when a DNS record actually exists
+    (a VPN-only connect may never have engaged the filter's DNS).
+    Returns the DnsGuard's RestoreResult."""
+
+    class _NoRecord:
+        ok = True
+        message = "No saved DNS settings to restore."
+
+    guard = _guard()
+    if guard.load_backup() is None and not guard.backup_file.exists():
+        return _NoRecord()
+    return guard.disengage()
+
+
+def _tunnel_guard(with_dns_restore: bool = False) -> TunnelGuard:
+    return TunnelGuard(
+        RealTunnelRunner(),
+        _tunnel_store(),
+        paths.runtime_dir(),
+        dns_restore=_dns_restore_for_tunnel if with_dns_restore else None,
+    )
+
+
+_MODE_WORDS = {
+    "vpn": "VPN only (DNS is not filtered in this mode — ads are not blocked)",
+    "vpn+blocker": "VPN + Blocker (DNS is filtered, then forwarded through the tunnel)",
+}
+
+
+def _vpn_status_lines() -> List[str]:
+    """The VPN facts for `sphinx status`, from the guard's real
+    reads — including the proof discipline: a record alone never
+    reads as 'connected'; only a fresh handshake does."""
+    guard = _tunnel_guard()
+    status = guard.status()
+    if status.state == TunnelState.DISENGAGED:
+        return ["  VPN: off — no tunnel is up and no server is selected."]
+    lines = []
+    if status.state == TunnelState.ENGAGED and status.handshake_fresh:
+        lines.append(
+            f"  VPN: on — '{status.profile_name}' is connected and "
+            f"proven (last handshake {status.handshake_age_s}s ago)."
+        )
+    elif status.state == TunnelState.UNKNOWN:
+        lines.append(
+            "  VPN: a tunnel interface is up but Sphinx has no record "
+            "of it, so Sphinx will not claim it or take it over."
+        )
+        return lines
+    else:
+        lines.append(
+            "  VPN: disconnected — the tunnel is not proven up, so "
+            "traffic this profile covers is blocked, not going "
+            "around the tunnel. Reconnect (sudo sphinx vpn connect "
+            f"{status.profile_name or '<name>'}) or disconnect on "
+            "purpose (sudo sphinx vpn disconnect)."
+        )
+    if status.mode in _MODE_WORDS:
+        lines.append(f"  VPN mode: {_MODE_WORDS[status.mode]}")
+    stored = _tunnel_store().get(status.profile_name) if status.profile_name else None
+    if stored is not None:
+        lines.append(
+            f"  VPN scope: this profile routes {stored.profile.scope_words()}."
+        )
+    return lines
+
+
+def _cmd_vpn_profile(args: argparse.Namespace) -> int:
+    action = args.vpn_profile_action
+    store = _tunnel_store()
+    if action is None:
+        print(
+            "Say what to do: sphinx vpn profile list, sphinx vpn "
+            "profile import <file>, sphinx vpn profile export "
+            "<name>, sphinx vpn profile remove <name>, or sphinx "
+            "vpn profile create <name> …"
+        )
+        return EXIT_REFUSED
+    if action == "list":
+        profiles = store.list_profiles()
+        if not profiles:
+            print(
+                "No server profiles yet — your server list starts "
+                "empty. Sphinx ships no servers of its own: add one "
+                "your provider gave you (sphinx vpn profile import) "
+                "or one you run yourself (sphinx vpn profile create)."
+            )
+        else:
+            print("Server profiles:")
+            for stored in profiles:
+                p = stored.profile
+                if p.protocol == "openvpn":
+                    print(
+                        f"  {p.name} — OpenVPN, server {p.endpoint} "
+                        "(stored and labeled; connecting arrives in Phase 2)"
+                    )
+                else:
+                    print(
+                        f"  {p.name} — WireGuard, server {p.endpoint}, "
+                        f"routes {p.scope_words()}"
+                    )
+        for problem in store.problems():
+            print(
+                f"  {problem.path.name}: cannot be used ({problem.reason}) "
+                "— the file was left exactly as it is."
+            )
+        return EXIT_OK
+    if action == "export":
+        stored = store.get(args.name or "")
+        if stored is None:
+            print(f"There is no server profile called '{args.name}' — nothing was exported.")
+            return EXIT_REFUSED
+        sys.stdout.write(stored.profile.export_text())
+        return EXIT_OK
+    if not _is_root():
+        return _root_refusal(
+            "Changing server profiles", f"vpn profile {action} {args.name or ''}".strip()
+        )
+    if action == "import":
+        if args.file and args.file != "-":
+            try:
+                text = open(args.file, encoding="utf-8").read()
+            except OSError as exc:
+                print(f"That file could not be read ({exc}) — nothing was imported.")
+                return EXIT_REFUSED
+            fallback_name = os.path.splitext(os.path.basename(args.file))[0]
+        else:
+            text = sys.stdin.read()
+            fallback_name = ""
+        try:
+            profile = parse_config(text)
+        except TunnelRefusal as exc:
+            print(
+                f"That profile was refused: {exc} "
+                f"(refusal: {exc.reason}). Nothing was imported, and "
+                "every profile you already have is untouched."
+            )
+            return EXIT_REFUSED
+        name = (args.name or profile.name or fallback_name or "").strip()
+        if not name:
+            print(
+                "That profile carries no name and there is no file "
+                "name to take one from — import it with a name: "
+                "sudo sphinx vpn profile import --name <name> -"
+            )
+            return EXIT_REFUSED
+        profile.set_name(name)
+        if store.get(name) is not None:
+            print(
+                f"A server profile called '{name}' already exists — "
+                "nothing was written over it. Remove it first (sudo "
+                f"sphinx vpn profile remove {name}) to replace it."
+            )
+            return EXIT_REFUSED
+        try:
+            store.save(profile)
+        except (ValueError, OSError) as exc:
+            print(f"That profile could not be saved: {exc}")
+            return EXIT_REFUSED
+        if profile.protocol == "openvpn":
+            print(
+                f"Server profile '{name}' saved — OpenVPN, server "
+                f"{profile.endpoint}. In Phase 1 an OpenVPN profile "
+                "is stored and labeled; connecting with it arrives "
+                "in Phase 2 and is refused, with this reason, until then."
+            )
+        else:
+            print(
+                f"Server profile '{name}' saved — WireGuard, server "
+                f"{profile.endpoint}, routes {profile.scope_words()}. "
+                "Choosing a server is trusting its operator with your "
+                "traffic; Sphinx vouches for no server."
+            )
+        return EXIT_OK
+    if action == "remove":
+        if not store.remove(args.name or ""):
+            print(f"There is no server profile called '{args.name}' — nothing changed.")
+            return EXIT_REFUSED
+        print(f"Server profile '{args.name}' removed.")
+        return EXIT_OK
+    # create
+    name = (args.name or "").strip()
+    if not name:
+        print("A new profile needs a name — nothing was created.")
+        return EXIT_REFUSED
+    if store.get(name) is not None:
+        print(f"A server profile called '{name}' already exists — nothing was created.")
+        return EXIT_REFUSED
+    guard = _tunnel_guard()
+    try:
+        private_key, public_key = guard.generate_keypair()
+    except RuntimeError as exc:
+        print(str(exc))
+        return EXIT_REFUSED
+    try:
+        text = build_wireguard_text(
+            name=name,
+            private_key=private_key,
+            addresses=[args.address],
+            dns=[d.strip() for d in (args.dns or "").split(",") if d.strip()],
+            server_public_key=args.server_key or "",
+            endpoint=args.endpoint or "",
+            allowed_ips=[
+                a.strip() for a in (args.allowed or "0.0.0.0/0").split(",") if a.strip()
+            ],
+        )
+        profile = parse_config(text)
+    except TunnelRefusal as exc:
+        print(
+            f"That profile was refused: {exc} (refusal: {exc.reason}). "
+            "Nothing was created."
+        )
+        return EXIT_REFUSED
+    try:
+        store.save(profile)
+    except (ValueError, OSError) as exc:
+        print(f"That profile could not be saved: {exc}")
+        return EXIT_REFUSED
+    print(f"Server profile '{name}' created. Its keypair was generated on this machine.")
+    print(f"  This device's public key: {public_key}")
+    print("  Give the server's operator this peer stanza for their server config:")
+    for line in server_peer_stanza(
+        client_public_key=public_key, addresses=[args.address]
+    ).splitlines():
+        print(f"    {line}")
+    print(
+        "  The private key never leaves this machine except in an "
+        "export you make yourself (sphinx vpn profile export)."
+    )
+    return EXIT_OK
+
+
+def _cmd_vpn(args: argparse.Namespace) -> int:
+    action = args.vpn_action
+    if action is None:
+        print(
+            "Say what to do: sphinx vpn profile …, sphinx vpn "
+            "connect <name>, sphinx vpn disconnect, or sphinx vpn status."
+        )
+        return EXIT_REFUSED
+    if action == "profile":
+        return _cmd_vpn_profile(args)
+    if action == "status":
+        for line in _vpn_status_lines():
+            print(line)
+        return EXIT_OK
+    if action == "connect":
+        if not _is_root():
+            return _root_refusal("Connecting the VPN", f"vpn connect {args.name or ''}")
+        store = _tunnel_store()
+        stored = store.get(args.name or "")
+        if stored is None:
+            print(f"There is no server profile called '{args.name}' — nothing was changed.")
+            return EXIT_REFUSED
+        mode = args.mode
+        if mode is None:
+            # Default: keep the blocker in the path when the filter
+            # is engaged; otherwise VPN only, said out loud below.
+            mode = (
+                "vpn+blocker"
+                if _guard().detect_state() == DnsState.ENGAGED
+                else "vpn"
+            )
+        result = _tunnel_guard().engage(stored.profile, mode=mode)
+        print(result.message)
+        if result.ok:
+            print(f"  Mode: {_MODE_WORDS[mode]}")
+            print(
+                "  Disconnecting returns this machine to the mode it "
+                "had before the VPN (Blocker only, or Off)."
+            )
+        return EXIT_OK if result.ok else EXIT_REFUSED
+    # disconnect
+    if not _is_root():
+        return _root_refusal("Disconnecting the VPN", "vpn disconnect")
+    result = _tunnel_guard(with_dns_restore=True).disengage()
+    print(result.message)
+    return EXIT_OK if result.ok else EXIT_REFUSED
+
+
 def _cmd_status(_args: argparse.Namespace) -> int:
     view = RealSystemView()
     guard = DnsGuard(view, paths.state_dir())
@@ -426,6 +722,8 @@ def _cmd_status(_args: argparse.Namespace) -> int:
     print(_lists_line(stats))
     print(f"  DNS right now: {_STATE_WORDS[state]}")
     print(f"  Resolver setup: {_STACK_WORDS[stack]}")
+    for line in _vpn_status_lines():
+        print(line)
     intent = guard.load_intent()
     if intent is not None:
         print(
@@ -498,6 +796,44 @@ def main(argv: Optional[List[str]] = None) -> int:
     ):
         action_parser = profile_sub.add_parser(action, help=blurb)
         action_parser.add_argument("name", help="the profile name")
+    vpn_parser = sub.add_parser(
+        "vpn",
+        help="VPN mode: server profiles and the tunnel (WireGuard connects in Phase 1; OpenVPN profiles are stored and labeled, connections arrive in Phase 2)",
+    )
+    vpn_sub = vpn_parser.add_subparsers(dest="vpn_action")
+    vpn_profile_parser = vpn_sub.add_parser(
+        "profile", help="server profiles: the servers you can connect to (the list starts empty — Sphinx ships no servers)"
+    )
+    vpn_profile_sub = vpn_profile_parser.add_subparsers(dest="vpn_profile_action")
+    vpn_profile_sub.add_parser("list", help="show your server profiles")
+    import_parser = vpn_profile_sub.add_parser(
+        "import", help="import a WireGuard or OpenVPN config from a file or stdin (needs sudo)"
+    )
+    import_parser.add_argument("file", nargs="?", default="-", help="the config file, or - for stdin")
+    import_parser.add_argument("--name", help="name the profile this (else the config's own name or the file name)")
+    export_parser = vpn_profile_sub.add_parser("export", help="print a profile's config text (it holds a private key — treat it like one)")
+    export_parser.add_argument("name", help="the profile name")
+    remove_parser = vpn_profile_sub.add_parser("remove", help="remove a server profile (needs sudo)")
+    remove_parser.add_argument("name", help="the profile name")
+    create_parser = vpn_profile_sub.add_parser(
+        "create", help="create a profile for a server you run: generates this device's keypair here, with wg (needs sudo)"
+    )
+    create_parser.add_argument("name", help="the profile name, like Home Server")
+    create_parser.add_argument("--server-key", required=True, help="the server's public key")
+    create_parser.add_argument("--endpoint", required=True, help="the server's endpoint, like vpn.example.com:51820")
+    create_parser.add_argument("--address", required=True, help="this device's tunnel address, like 10.8.0.2/32")
+    create_parser.add_argument("--dns", default="", help="the profile's DNS servers, comma-separated (optional)")
+    create_parser.add_argument("--allowed", default="0.0.0.0/0", help="which traffic enters the tunnel (default 0.0.0.0/0 — all of it)")
+    connect_parser = vpn_sub.add_parser("connect", help="connect a server profile (needs sudo)")
+    connect_parser.add_argument("name", help="the profile name")
+    connect_parser.add_argument(
+        "--mode",
+        choices=("vpn", "vpn+blocker"),
+        default=None,
+        help="vpn = tunnel only, DNS unfiltered; vpn+blocker = tunnel with the ad filter in the DNS path (default: vpn+blocker when the filter is on, else vpn)",
+    )
+    vpn_sub.add_parser("disconnect", help="disconnect the tunnel and put DNS back as it was (needs sudo)")
+    vpn_sub.add_parser("status", help="show the VPN state, proven — never claimed from intent")
     args = parser.parse_args(argv)
     handlers = {
         "serve": _cmd_serve,
@@ -509,6 +845,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "allow": _cmd_rule,
         "block": _cmd_rule,
         "profile": _cmd_profile,
+        "vpn": _cmd_vpn,
     }
     handler = handlers.get(args.command or "")
     if handler is None:
