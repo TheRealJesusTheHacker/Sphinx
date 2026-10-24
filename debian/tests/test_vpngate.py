@@ -39,6 +39,36 @@ def _dead_fetcher():
     return boom
 
 
+def test_production_opener_refuses_redirects():
+    # Sweep #5: urllib's default opener follows redirects —
+    # including an HTTPS -> HTTP downgrade — which broke this
+    # fetch's HTTPS rule (the Android fetcher refuses redirects
+    # for this feed outright). The production opener must raise
+    # on a redirect instead of following it.
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+
+    class Redirector(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", "http://127.0.0.1/feed")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Redirector)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/feed"
+        with pytest.raises(urllib.error.HTTPError):
+            vpngate._open_no_redirect(urllib.request.Request(url), timeout=5)
+    finally:
+        server.shutdown()
+
+
 def test_feed_parser_reads_fixture_rows():
     rows = vpngate.parse_feed(FIXTURE_FEED)
     assert len(rows) == 2

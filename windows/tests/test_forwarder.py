@@ -77,6 +77,42 @@ def test_wrong_id_datagram_is_ignored_not_delivered():
     assert answer[0:2] == query[0:2]
 
 
+def test_ipv6_upstream_is_reached():
+    # Sweep #5: a VPN profile may name IPv6 DNS servers, but the
+    # forwarder built its socket as AF_INET unconditionally, so
+    # an IPv6 upstream's connect always failed and a profile
+    # whose DNS is IPv6-only left every allowed query unanswered
+    # in VPN + Blocker mode. (The Debian forwarder already picks
+    # the family per resolver.) Skip where IPv6 loopback is
+    # unavailable in the environment.
+    try:
+        probe = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+        probe.bind(("::1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+    except OSError:
+        pytest.skip("IPv6 loopback unavailable in this environment")
+    query = build_query("example.com")
+    server = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    server.bind(("::1", port))
+    server.settimeout(5)
+
+    def serve():
+        try:
+            data, addr = server.recvfrom(65535)
+            server.connect(addr)
+            server.send(build_response_for(data))
+        except OSError:
+            pass
+        finally:
+            server.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    answer = forward_query(query, resolvers=("::1",), port=port, timeout=2)
+    assert answer is not None
+    assert answer[0:2] == query[0:2]
+
+
 def test_no_answer_returns_none_after_fallback():
     port = free_udp_port()  # nothing listens there
     query = build_query("example.com")

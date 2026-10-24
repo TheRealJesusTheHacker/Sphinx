@@ -16,6 +16,7 @@ import csv
 import io
 import json
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -179,13 +180,35 @@ def fetch_live(fetcher: Callable[[], str]) -> List[PublicRow]:
     return parse_feed(text)
 
 
-def default_fetcher() -> str:
-    """The production fetch: HTTPS, timeout-bounded, size-capped
-    while reading (never an unbounded download)."""
-    import urllib.request
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse urllib's automatic redirects. The Android edition's
+    fetcher does not follow redirects for this feed at all (a
+    redirect off the feed's own HTTPS answer is a failure, not a
+    detour), and urllib's default handling would follow one even
+    to plain HTTP — silently breaking this fetch's HTTPS rule.
+    Returning None makes urllib raise HTTPError on any redirect,
+    which get_directory turns into the cache/empty fallback."""
 
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _open_no_redirect(request, timeout=None):
+    """The production opener for the feed fetch: urllib, with
+    redirects refused (see _NoRedirect)."""
+    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
+
+
+def default_fetcher() -> str:
+    """The production fetch: HTTPS (redirects refused outright,
+    so no hop can downgrade to plain HTTP — the Android fetcher's
+    discipline), timeout-bounded, size-capped while reading
+    (never an unbounded download)."""
     req = urllib.request.Request(FEED_URL, headers={"User-Agent": "Sphinx"})
-    with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
+    with _open_no_redirect(req, timeout=FETCH_TIMEOUT_S) as resp:
         raw = resp.read(MAX_FEED_BYTES + 1)
     if len(raw) > MAX_FEED_BYTES:
         raise ValueError("the public server feed was larger than Sphinx will accept")

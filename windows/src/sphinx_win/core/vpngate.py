@@ -205,6 +205,29 @@ def parse_feed(text: str) -> List[VpnGateServer]:
     return servers
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse urllib's automatic redirects. The Android edition's
+    fetcher does not follow redirects for this feed at all (a
+    redirect off the feed's own HTTPS answer is a failure, not a
+    detour), and urllib's default handling would follow one even
+    to plain HTTP — silently breaking this module's HTTPS-only
+    rule. Returning None makes urllib raise HTTPError on any
+    redirect, which the fetch turns into the honest failure."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _open_no_redirect(request, timeout=None):
+    """The production opener for the feed fetch: urllib, with
+    redirects refused (see _NoRedirect). Matches the ``opener``
+    injection seam's (request, timeout) shape."""
+    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
+
+
 def fetch_feed_text(
     url: str = FEED_URL,
     *,
@@ -212,16 +235,19 @@ def fetch_feed_text(
     max_bytes: int = MAX_FEED_BYTES,
     opener: Optional[Callable] = None,
 ) -> str:
-    """Fetch the feed text, bounded: HTTPS only, a hard timeout,
-    and a hard size cap (the response is read to the cap + 1 and
+    """Fetch the feed text, bounded: HTTPS only (redirects are
+    refused outright, so no hop can downgrade to plain HTTP —
+    the Android fetcher's discipline), a hard timeout, and a
+    hard size cap (the response is read to the cap + 1 and
     refused past it — never buffered unbounded). ``opener`` is
-    the injection seam for tests; production uses urllib."""
+    the injection seam for tests; production uses urllib
+    through _open_no_redirect."""
     if not url.lower().startswith("https://"):
         raise VpnGateFeedError("The server list is fetched over HTTPS only.")
     request = urllib.request.Request(
         url, headers={"User-Agent": "Sphinx (VPN Gate directory)"}
     )
-    open_fn = opener or urllib.request.urlopen
+    open_fn = opener or _open_no_redirect
     try:
         with open_fn(request, timeout=timeout) as response:
             raw = response.read(max_bytes + 1)

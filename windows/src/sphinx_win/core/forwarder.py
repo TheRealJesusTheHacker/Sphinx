@@ -23,6 +23,7 @@ so no equivalent guard is needed.
 """
 from __future__ import annotations
 
+import ipaddress
 import socket
 import time
 from typing import Callable, Optional, Sequence
@@ -43,6 +44,21 @@ def _is_answer(data: bytes, query_id: int) -> bool:
 
 def _is_truncated(data: bytes) -> bool:
     return len(data) >= 3 and bool(data[2] & 0x02)  # TC bit
+
+
+def _family(resolver: str) -> socket.AddressFamily:
+    """The socket family a resolver address needs. VPN profiles
+    may name IPv6 DNS servers (the profile parser accepts any IP
+    literal, and the controller's tunnel-DNS path already splits
+    servers by family); an AF_INET socket cannot reach one — its
+    connect fails as a resolver failure, so a profile whose DNS
+    is IPv6-only would leave every allowed query unanswered in
+    VPN + Blocker mode. The Debian edition's forwarder already
+    chooses the family per resolver; this is the same rule."""
+    try:
+        return socket.AF_INET6 if ipaddress.ip_address(resolver).version == 6 else socket.AF_INET
+    except ValueError:
+        return socket.AF_INET
 
 
 def _tcp_exchange(
@@ -99,7 +115,7 @@ def forward_query(
         return None
     query_id = (query[0] << 8) | query[1]
     for resolver in resolvers:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock = socket.socket(_family(resolver), socket.SOCK_DGRAM)
         try:
             # Connected, not just addressed: the kernel then only
             # delivers datagrams that actually come from this
