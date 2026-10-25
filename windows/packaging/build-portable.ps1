@@ -5,7 +5,7 @@
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
-python -m pip install -r requirements-dev.txt
+python -m pip install --require-hashes -r requirements-dev.lock.txt
 python -m pytest tests -q
 python -m PyInstaller packaging/Sphinx.spec --noconfirm --distpath dist --workpath build/pyi
 

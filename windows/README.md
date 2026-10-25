@@ -558,13 +558,24 @@ live in their own file where list updates never touch them.
 
 ```
 cd windows
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock.txt
 python -m sphinx_win.app.main        # with src/ on PYTHONPATH
 ```
 
 (Set `PYTHONPATH=src`, or `pip install -e` style usage — the test
 suite's `tests/conftest.py` shows the path setup.) Tests:
-`pip install -r requirements-dev.txt`, then `python -m pytest`.
+`pip install --require-hashes -r requirements-dev.lock.txt`, then `python -m pytest`.
+
+Dependencies install from hash locks, not the ranges: the
+`requirements*.txt` files name the ranges this edition accepts, and
+the sibling `requirements*.lock.txt` files freeze one resolution of
+them with a SHA-256 for every artifact (`--require-hashes` makes
+pip fail loudly if a download does not match). Regenerate a lock
+with the pip-compile command in its header and run the full suite
+on any intentional bump — never edit a hash by hand. (The dev
+lock's header also documents its one hand-added entry:
+PyInstaller's Windows-only dependencies, which a Linux pip-compile
+cannot see.)
 
 Data directory: `%LOCALAPPDATA%\Sphinx` for an installed/frozen
 build; a `portable.txt` beside a frozen exe switches to `.\data`
