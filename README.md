@@ -307,6 +307,20 @@ Requires JDK 17 and the Android SDK (platform 34, build-tools 34).
 ./gradlew :app:testDebugUnitTest  # JVM unit tests (DNS parsing, blocklist)
 ```
 
+Dependency verification is on: `gradle/verification-metadata.xml`
+pins a SHA-256 checksum for every artifact the build resolves —
+the Android Gradle Plugin and Kotlin plugin classpaths, the app
+dependencies (WireGuard tunnel, ZXing, desugar), and the test
+dependencies — and Gradle fails the build if a downloaded artifact
+does not match. The metadata was generated from the actual
+resolution of the versions pinned in the build files
+(`./gradlew --write-verification-metadata sha256 testDebugUnitTest assembleRelease`);
+regenerate it the same way after any intentional dependency bump
+and commit the result — never hand-edit a checksum to make a
+build pass. Checksums only (no PGP signature verification). The
+Gradle distribution itself is fetched by the wrapper before this
+metadata applies; it is not covered by it.
+
 ## Credits
 
 Built by **Sentinel Safeguard LLC** — Kansas City, Missouri.
