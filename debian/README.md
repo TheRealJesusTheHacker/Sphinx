@@ -463,6 +463,24 @@ debian/
                 scripts, the systemd unit, the default config
 ```
 
+## Running the tests
+
+The runtime is standard-library only — there is nothing to install
+to run Sphinx itself. For development, the test suite's one
+dependency installs from its hash lock (the range in
+`requirements-dev.txt`, frozen with a SHA-256 for every artifact;
+`--require-hashes` makes pip fail loudly on a mismatch):
+
+```sh
+cd debian
+pip install --require-hashes -r requirements-dev.lock.txt
+python -m pytest
+```
+
+Regenerate the lock with the pip-compile command in its header and
+run the full suite on any intentional bump — never edit a hash by
+hand.
+
 ## Status
 
 Debian Phase 2, version **0.2.1** — shipped in Sphinx **v1.0.1
