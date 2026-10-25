@@ -21,6 +21,9 @@ on:
       - "docs/TUNNEL-SPEC.md"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test-and-build:
     runs-on: ubuntu-latest

@@ -13,6 +13,9 @@ on:
       - "windows/**"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test-and-build:
     runs-on: windows-latest
