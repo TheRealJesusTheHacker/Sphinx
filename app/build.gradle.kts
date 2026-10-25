@@ -130,6 +130,6 @@ dependencies {
     // Exact versions only — no dynamic ranges, ever.
     implementation("com.wireguard.android:tunnel:1.0.20250531")
     implementation("com.google.zxing:core:3.5.3")
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     testImplementation("junit:junit:4.13.2")
 }
