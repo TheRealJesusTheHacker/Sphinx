@@ -8,6 +8,106 @@ never merely to make a report prettier).
 
 ---
 
+## Require-hashes rollout — dependency hash locks in all three editions (2026-10-25)
+
+Scope: the fleet `--require-hashes` policy (owner policy adopted
+2026-10-25 — every dependency install, local / build / CI, verifies
+hashes against a committed lock generated from a known-good
+resolution and fails loudly on mismatch; exceptions only with
+documented evidence). No dependency version changed anywhere in
+this rollout, no functionality changed, signing untouched, and no
+release was cut (the changes ride the owner's v1.0.2 chain).
+
+### Android (Gradle)
+
+- `gradle/verification-metadata.xml` committed: SHA-256 checksums
+  for 257 components / 452 artifacts, generated from the actual
+  resolution of the pinned versions (AGP 8.5.2, Kotlin 2.0.20,
+  WireGuard tunnel 1.0.20250531, ZXing 3.5.3, desugar 2.1.4,
+  JUnit 4.13.2) — plugin classpaths, app, desugaring, and test
+  configurations all covered.
+- Generation route, stated plainly: the Gradle daemon on the dev
+  VM cannot complete a client handshake (reproduced on an empty
+  project), so the fleet protocol's CI fallback was used — a
+  temporary workflow_dispatch job ran
+  `--write-verification-metadata sha256` over `testDebugUnitTest`
+  + `assembleRelease` and uploaded the file as an artifact
+  (run 40198209592, success); the temporary workflow was removed
+  in the same commit that landed the metadata (c3f5be32).
+- Enforcement, observed both ways in CI: the standing gate
+  (`sphinx-android.yml`) is green at the metadata commit
+  (run 40198891893, success), and a scratch branch with one hex
+  character of one checksum corrupted failed the same gate with
+  "Dependency verification failed for configuration
+  ':app:debugRuntimeClasspath' — One artifact failed
+  verification: annotation-1.9.1.module
+  (androidx.annotation:annotation:1.9.1) from repository Google"
+  (run 40198904660, failure, as required). The scratch branch was
+  deleted after the proof.
+- Boundaries: checksums only (the generated configuration sets
+  `verify-signatures` false — no PGP verification); the Gradle
+  distribution itself is fetched by the wrapper before this
+  metadata applies and is not covered by it; the Android suite
+  runs in CI only, as before.
+
+### Windows (Python)
+
+- `windows/requirements.lock.txt` (runtime: PySide6 6.12.0 set)
+  and `windows/requirements-dev.lock.txt` (adds pytest 9.1.1,
+  PyInstaller 6.22.3, setuptools 84.2.1, and transitive deps)
+  generated with `pip-compile --generate-hashes` (the dev lock
+  with `--allow-unsafe` so setuptools is pinned and hashed too).
+  The ranges in `requirements.txt` / `requirements-dev.txt` are
+  unchanged.
+- One documented exception, recorded in the dev lock's header:
+  PyInstaller's Windows-only dependencies (pefile 2024.8.26,
+  pywin32-ctypes 0.2.3) were hand-added with `sys_platform ==
+  "win32"` markers and the full set of index hashes, because
+  pip-compile resolves for its host platform (Linux) and omits
+  them while the Windows install needs them. Evidence: PyPI
+  metadata for pyinstaller 6.22.3 (its `requires_dist`), pefile,
+  and pywin32-ctypes, fetched 2026-10-25 — and the wired Windows
+  CI run below installing them on a real Windows runner.
+- Wired to `--require-hashes` + the locks: `sphinx-windows.yml`,
+  `release.yml` (both edition jobs), `packaging/build-portable.ps1`,
+  and the README's from-source instructions.
+- Proofs: clean-venv `pip install --require-hashes` succeeds for
+  both locks; the suite holds its Sweep #5 baseline exactly
+  (340 passed, 2 skipped); a scratch lock with altgraph's hashes
+  corrupted is refused with pip's "THESE PACKAGES DO NOT MATCH
+  THE HASHES" error (exit 1, output recorded in the rollout
+  workpapers); CI at the wiring commit (8ed27bea) is green end to
+  end — install, suite, smokes, PyInstaller build, installer
+  (run 40203588052, success).
+
+### Debian (Python)
+
+- The runtime is standard-library only — there is no runtime
+  requirements file and nothing to lock. The dev range
+  (`pytest>=8`) is frozen in `debian/requirements-dev.lock.txt`
+  (pytest 9.1.1 + deps) via `pip-compile --generate-hashes`.
+- Wired: `sphinx-debian.yml`, `release.yml`'s Debian job, and a
+  new "Running the tests" section in the Debian README.
+- Proofs: clean-venv `pip install --require-hashes` succeeds;
+  the suite is byte-identical before/after in the dev container
+  (211 passed, 11 skipped, and the same 2 pre-existing
+  environmental failures in `test_packaging.py` — the dpkg/tar
+  chown block of this container, untouched and unhidden); a
+  scratch lock with pluggy's hashes corrupted is refused with
+  pip's hash-mismatch error (exit 1); CI at the wiring commit
+  (9c2f558d) is green — install, suite, .deb build and payload
+  verification (run 40203633615, success).
+
+### Notes
+
+- Regeneration is documented in every lock's header and in the
+  edition READMEs: re-run the recorded pip-compile command (or,
+  for Gradle, the recorded `--write-verification-metadata`
+  invocation), run the full suite, and commit — on an intentional
+  bump only, never by editing a hash to make a build pass.
+
+---
+
 ## VPN program audit — TUNNEL-SPEC, server package, and VPN mode in all three editions (2026-10-23)
 
 Scope: the VPN program as landed on `main` at HEAD
