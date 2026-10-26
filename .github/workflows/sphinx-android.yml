@@ -70,6 +70,7 @@ jobs:
     needs: gate
     if: inputs.build_signed
     runs-on: ubuntu-latest
+    environment: release
     env:
       SPHINX_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.SPHINX_ANDROID_KEYSTORE_PASSWORD }}
       SPHINX_ANDROID_KEY_ALIAS: ${{ secrets.SPHINX_ANDROID_KEY_ALIAS }}
