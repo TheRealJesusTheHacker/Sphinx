@@ -301,15 +301,15 @@ CI). The Android JVM suite could not be run in the sweep sandbox
 3. **CI actions are SHA-pinned.** Both Sphinx workflows used
    floating major tags for checkout / setup-python /
    upload-artifact; they now pin the exact commits those tags
-   resolve to (the convention the HackProof workflow already
-   follows), with the tag named in a comment.
+   resolve to (the convention the Sentinel Academy workflow
+   already follows), with the tag named in a comment.
    *(.github/workflows/sphinx-windows.yml, sphinx-debian.yml)*
 
 ### Verified clean
 
 - Secrets scan of the full tree: no hits. No hardcoded or
   default credentials anywhere; the only admin surface in the
-  fleet cluster (HackProof payments, audited alongside) is
+  fleet cluster (Sentinel Academy payments, audited alongside) is
   token-gated and disabled when unconfigured.
 - pip-audit over every Python requirement set in the repo: no
   known vulnerabilities.
